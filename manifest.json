@@ -1,0 +1,40 @@
+{
+  "id": "catastro-spain",
+  "name": "Catastro Spain",
+  "description": "Spanish cadastre integration for reverse geocoding and parcel lookup",
+  "version": "1.0.0",
+  "author": "Nekazari Team",
+  "category": "geospatial",
+  "backend": {
+    "enabled": true,
+    "port": 5000,
+    "healthPath": "/health",
+    "routes": [
+      "/parcels",
+      "/parcels/:id",
+      "/parcels/summary",
+      "/parcels/query-by-coordinates",
+      "/orion/notify"
+    ]
+  },
+  "frontend": {
+    "enabled": false
+  },
+  "dependencies": {
+    "services": [
+      "postgresql",
+      "orion-ld"
+    ],
+    "extensions": [
+      "postgis"
+    ]
+  },
+  "config": {
+    "regions": [
+      "spain-state",
+      "navarra",
+      "euskadi"
+    ],
+    "sync_to_postgres": true
+  }
+}
