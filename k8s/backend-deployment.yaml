@@ -63,7 +63,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: postgresql-secret
-                  key: connection-string
+                  key: postgres-url
           resources:
             requests:
               memory: "128Mi"
