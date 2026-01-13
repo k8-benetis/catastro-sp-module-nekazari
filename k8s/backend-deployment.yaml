@@ -1,49 +1,49 @@
 # =============================================================================
-# MODULE_DISPLAY_NAME Backend Deployment
+# Catastro Spain Backend Deployment
 # =============================================================================
-# Backend API service for MODULE_DISPLAY_NAME module
+# Backend API service for Catastro Spain module
 # =============================================================================
 
 ---
-# Deployment: MODULE_DISPLAY_NAME Backend Service
+# Deployment: Catastro Spain Backend Service
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: MODULE_NAME-backend
+  name: catastro-spain-backend
   namespace: nekazari
   labels:
-    app: MODULE_NAME-backend
+    app: catastro-spain-backend
     component: backend
-    module: MODULE_NAME
+    module: catastro-spain
     nekazari.io/profile: addon
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: MODULE_NAME-backend
+      app: catastro-spain-backend
   template:
     metadata:
       labels:
-        app: MODULE_NAME-backend
+        app: catastro-spain-backend
         component: backend
-        module: MODULE_NAME
+        module: catastro-spain
     spec:
       imagePullSecrets:
         - name: ghcr-secret
       containers:
         - name: backend
-          image: ghcr.io/YOUR_ORG/MODULE_NAME-backend:v1.0.0
+          image: ghcr.io/k8-benetis/catastro-sp-module-nekazari/catastro-spain-backend:latest
           imagePullPolicy: Always
           ports:
             - name: http
-              containerPort: 8000
+              containerPort: 5000
           env:
             - name: APP_NAME
-              value: "MODULE_DISPLAY_NAME"
+              value: "Catastro Spain"
             - name: DEBUG
               value: "false"
             - name: API_PREFIX
-              value: "/api/MODULE_NAME"
+              value: "/api/cadastral-api"
             # Keycloak Configuration
             - name: KEYCLOAK_URL
               value: "https://auth.artotxiki.com/auth"
@@ -58,12 +58,12 @@ spec:
                   name: module-secrets
                   key: management-key
                   optional: true
-          # Database (if needed - uncomment and configure)
-          # - name: DATABASE_URL
-          #   valueFrom:
-          #     secretKeyRef:
-          #       name: postgresql-secret
-          #       key: connection-string
+            # Database connection
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-secret
+                  key: connection-string
           resources:
             requests:
               memory: "128Mi"
@@ -74,34 +74,35 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: 5000
             initialDelaySeconds: 15
             periodSeconds: 30
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: 5000
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
 
 ---
-# Service: MODULE_DISPLAY_NAME Backend API
+# Service: Catastro Spain Backend API
 apiVersion: v1
 kind: Service
 metadata:
-  name: MODULE_NAME-api-service
+  name: catastro-spain-api-service
   namespace: nekazari
   labels:
-    app: MODULE_NAME-backend
-    module: MODULE_NAME
+    app: catastro-spain-backend
+    component: backend
+    module: catastro-spain
 spec:
   type: ClusterIP
-  ports:
-    - port: 8000
-      targetPort: 8000
-      protocol: TCP
-      name: http
   selector:
-    app: MODULE_NAME-backend
+    app: catastro-spain-backend
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      protocol: TCP

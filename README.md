@@ -6,8 +6,28 @@ Spanish Cadastre integration module for the Nekazari agricultural platform.
 
 - **Multi-region support**: Spain (State), Navarra, Euskadi
 - **Reverse geocoding**: Query parcels by coordinates
+- **Click-to-add parcels**: Add cadastral parcels with a single click on the map
 - **Orion-LD sync**: Webhook receiver for AgriParcel entity synchronization
 - **PostGIS cache**: Spatial queries for agricultural analytics
+
+## Frontend Features
+
+### Click-to-Add Parcels
+
+The module adds a click handler to the `/entities` page that allows users to add cadastral parcels with a single click:
+
+1. Navigate to the Entities page (`/entities`)
+2. Click on any empty space on the map
+3. The module will:
+   - Query the cadastral service for the clicked coordinates
+   - If a parcel is found, automatically create it in Orion-LD
+   - Show a success notification with parcel details
+   - Reload the page to display the new parcel
+
+**Note**: The click handler only activates when:
+- You're on the `/entities` page
+- You click on empty space (not on an existing entity)
+- The cadastral service returns geometry for the parcel
 
 ## API Endpoints
 
@@ -20,7 +40,7 @@ Spanish Cadastre integration module for the Nekazari agricultural platform.
 | `/parcels/<id>` | PUT | Update parcel |
 | `/parcels/<id>` | DELETE | Delete parcel |
 | `/parcels/summary` | GET | Tenant statistics |
-| `/parcels/query-by-coordinates` | GET | Reverse geocode from coordinates |
+| `/parcels/query-by-coordinates` | POST | Reverse geocode from coordinates |
 | `/orion/notify` | POST | Webhook for Orion-LD notifications |
 
 ## Requirements
@@ -28,6 +48,7 @@ Spanish Cadastre integration module for the Nekazari agricultural platform.
 - PostgreSQL with PostGIS extension
 - Access to Orion-LD (for sync)
 - Keycloak (for authentication)
+- Node.js 18+ (for frontend build)
 
 ## Environment Variables
 
@@ -41,15 +62,55 @@ ORION_URL=http://orion-ld:1026
 KEYCLOAK_URL=http://keycloak:8080
 ```
 
+## Development
+
+### Frontend
+
+```bash
+cd nkz-module-cadastrial_sp
+npm install
+npm run dev
+```
+
+### Backend
+
+```bash
+cd backend
+pip install -r requirements.txt
+python app/cadastral_api.py
+```
+
+## Building
+
+### Frontend
+
+```bash
+npm run build
+```
+
+The build output will be in the `dist/` directory, including `remoteEntry.js` for Module Federation.
+
+### Backend
+
+```bash
+docker build -t catastro-module-backend ./backend
+```
+
 ## Deployment
 
 ```bash
-# Build image
-docker build -t catastro-module-backend ./backend
-
 # Deploy to Kubernetes
-kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/backend-deployment.yaml
+kubectl apply -f k8s/frontend-deployment.yaml
 ```
+
+## Module Integration
+
+This module integrates with the Nekazari platform through:
+
+1. **Slot System**: Registers a `map-layer` slot component that handles map clicks
+2. **Viewer Context**: Uses the `useViewer` hook to access the Cesium viewer instance
+3. **API Integration**: Uses the platform's cadastral and parcel APIs
 
 ## License
 

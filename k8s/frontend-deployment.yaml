@@ -1,36 +1,38 @@
 # =============================================================================
-# MODULE_DISPLAY_NAME Frontend Deployment
+# Catastro Spain Frontend Deployment
 # =============================================================================
-# Frontend service for MODULE_DISPLAY_NAME module
+# Frontend service for Catastro Spain module
 # =============================================================================
 
 ---
-# Deployment: MODULE_DISPLAY_NAME Frontend Service
+# Deployment: Catastro Spain Frontend Service
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: MODULE_NAME-frontend
+  name: catastro-spain-frontend
   namespace: nekazari
   labels:
-    app: MODULE_NAME-frontend
+    app: catastro-spain-frontend
     component: frontend
-    module: MODULE_NAME
+    module: catastro-spain
     nekazari.io/profile: addon
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: MODULE_NAME-frontend
+      app: catastro-spain-frontend
   template:
     metadata:
       labels:
-        app: MODULE_NAME-frontend
+        app: catastro-spain-frontend
         component: frontend
-        module: MODULE_NAME
+        module: catastro-spain
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
-      - name: frontend
-        image: ghcr.io/YOUR_ORG/MODULE_NAME-frontend:v1.0.0
+      - name: nginx
+        image: ghcr.io/k8-benetis/catastro-sp-module-nekazari/catastro-spain-frontend:latest
         imagePullPolicy: Always
         ports:
         - name: http
@@ -56,22 +58,23 @@ spec:
           periodSeconds: 10
 
 ---
-# Service: MODULE_DISPLAY_NAME Frontend
+# Service: Catastro Spain Frontend
 apiVersion: v1
 kind: Service
 metadata:
-  name: MODULE_NAME-frontend-service
+  name: catastro-spain-frontend-service
   namespace: nekazari
   labels:
-    app: MODULE_NAME-frontend
-    module: MODULE_NAME
+    app: catastro-spain-frontend
+    component: frontend
+    module: catastro-spain
 spec:
   type: ClusterIP
+  selector:
+    app: catastro-spain-frontend
   ports:
-  - port: 80
+  - name: http
+    port: 80
     targetPort: 80
     protocol: TCP
-    name: http
-  selector:
-    app: MODULE_NAME-frontend
 
