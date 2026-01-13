@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'task-queue'))
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Use Keycloak authentication from local common module
-from common.keycloak_auth import require_keycloak_auth as require_auth, get_current_user, get_current_tenant
+# Use simple authentication middleware (trusts API Gateway validation)
+from auth_middleware import require_auth, get_current_user, get_current_tenant
 
 # Use task queue from local module
 from task_queue.task_queue import TaskQueue, TaskType
