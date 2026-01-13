@@ -1,7 +1,4 @@
 import axios, { AxiosInstance } from 'axios';
-import { getConfig } from '@nekazari/sdk';
-
-const config = getConfig();
 
 export interface Parcel {
   id?: string;
@@ -24,9 +21,9 @@ class ParcelApiService {
   private client: AxiosInstance;
 
   constructor() {
-    const config = getConfig();
+    // Use relative URL - the host will proxy to the correct service
     this.client = axios.create({
-      baseURL: config.apiBaseUrl || '/api',
+      baseURL: '/api',
       headers: {
         'Content-Type': 'application/ld+json',
       },
@@ -121,10 +118,11 @@ class ParcelApiService {
     }
 
     // Use the parcel API from the host platform (same as parcelApi.createParcel in host)
+    // Context URL is typically https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld
     const response = await this.client.post('/ngsi-ld/v1/entities', entity, {
       headers: {
         'Content-Type': 'application/ld+json',
-        'Link': `<${config.external.contextUrl}>; rel="http://www.w3.org/ns/json-ld#context"; type="application/ld+json"`,
+        'Link': `<https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld>; rel="http://www.w3.org/ns/json-ld#context"; type="application/ld+json"`,
       },
     });
 

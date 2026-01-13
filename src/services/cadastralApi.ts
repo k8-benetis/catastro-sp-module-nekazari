@@ -1,5 +1,4 @@
 import axios, { AxiosInstance } from 'axios';
-import { getConfig } from '@nekazari/sdk';
 
 export interface CadastralData {
   cadastralReference: string;
@@ -18,9 +17,9 @@ class CadastralApiService {
   private client: AxiosInstance;
 
   constructor() {
-    const config = getConfig();
+    // Use relative URL - the host will proxy to the correct service
     this.client = axios.create({
-      baseURL: config.apiBaseUrl || '/api',
+      baseURL: '/api',
       headers: {
         'Content-Type': 'application/json',
       },
