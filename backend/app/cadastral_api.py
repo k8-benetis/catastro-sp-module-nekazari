@@ -25,9 +25,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Use simple authentication middleware (trusts API Gateway validation)
 from auth_middleware import require_auth, get_current_user, get_current_tenant
 
-# Use task queue from local module
-from task_queue.task_queue import TaskQueue, TaskType
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -36,16 +33,6 @@ CORS(app)
 
 # Configuration
 POSTGRES_URL = os.getenv('POSTGRES_URL', 'postgresql://postgres:postgres@postgresql-service:5432/nekazari')
-REDIS_URL = os.getenv('REDIS_URL', 'redis://redis-service:6379')
-
-# Initialize task queue
-try:
-    task_queue = TaskQueue(stream_name='tasks:ndvi')
-    task_queue_available = True
-except Exception as e:
-    logger.warning(f"Task queue not available: {e}")
-    task_queue_available = False
-    task_queue = None
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -643,29 +630,9 @@ def request_ndvi_processing(parcel_id):
         if not parcel.get('ndvi_enabled', True):
             return jsonify({'error': 'NDVI processing is disabled for this parcel'}), 400
         
-        # Enqueue NDVI task
-        from datetime import datetime
-        
-        ndvi_task = {
-            'type': 'ndvi_processing',
-            'tenant_id': tenant_id,
-            'parcel_id': parcel_id,
-            'date': acquisition_date or datetime.now().isoformat(),
-            'created_at': datetime.now().isoformat()
-        }
-        
-        # Enqueue to Redis Streams via task queue
-        if task_queue_available and task_queue:
-            try:
-                task_queue.enqueue_task(TaskType.NDVI_PROCESSING, ndvi_task)
-                logger.info(f"NDVI task enqueued for parcel {parcel_id}")
-            except Exception as e:
-                logger.error(f"Failed to enqueue NDVI task: {e}")
-                return jsonify({'error': 'Failed to enqueue NDVI task'}), 500
-        else:
-            logger.warning("Task queue not available, skipping enqueue")
-        
-        logger.info(f"NDVI processing requested for parcel {parcel_id}")
+        # Note: NDVI processing is handled by the vegetation-health module
+        # This endpoint just logs the request
+        logger.info(f"NDVI processing requested for parcel {parcel_id} (tenant: {tenant_id})")
         
         cur.close()
         conn.close()
@@ -711,32 +678,9 @@ def batch_request_ndvi():
         cur.close()
         conn.close()
         
-        # Enqueue multiple tasks
-        if task_queue_available and task_queue:
-            from datetime import datetime
-            enqueued = 0
-            failed = 0
-            
-            for parcel_id in valid_parcels:
-                try:
-                    task = {
-                        'type': 'ndvi_processing',
-                        'tenant_id': tenant_id,
-                        'parcel_id': parcel_id,
-                        'date': data.get('date') or datetime.now().isoformat(),
-                        'created_at': datetime.now().isoformat()
-                    }
-                    task_queue.enqueue_task(TaskType.NDVI_PROCESSING, task)
-                    enqueued += 1
-                except Exception as e:
-                    logger.error(f"Failed to enqueue task for parcel {parcel_id}: {e}")
-                    failed += 1
-            
-            logger.info(f"Batch NDVI: {enqueued} enqueued, {failed} failed")
-        else:
-            logger.warning("Task queue not available for batch NDVI")
-        
-        logger.info(f"Batch NDVI processing requested for {len(valid_parcels)} parcels")
+        # Note: NDVI processing is handled by the vegetation-health module
+        # This endpoint just logs the request
+        logger.info(f"Batch NDVI processing requested for {len(valid_parcels)} parcels (tenant: {tenant_id})")
         
         return jsonify({
             'message': 'NDVI processing request submitted',
