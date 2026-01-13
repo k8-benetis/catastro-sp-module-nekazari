@@ -22,23 +22,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'task-queue'))
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Use Keycloak authentication from common module
-try:
-    from keycloak_auth import require_keycloak_auth as require_auth, get_current_user, get_current_tenant
-except ImportError:
-    try:
-        from common.keycloak_auth import require_keycloak_auth as require_auth, get_current_user, get_current_tenant
-    except ImportError:
-        # Fallback to old auth_middleware if keycloak not available
-        try:
-            from common.auth_middleware import require_auth, get_current_user
-        except ImportError:
-            from auth_middleware import require_auth, get_current_user
+# Use Keycloak authentication from local common module
+from common.keycloak_auth import require_keycloak_auth as require_auth, get_current_user, get_current_tenant
 
-try:
-    from task_queue import TaskQueue, TaskType
-except ImportError:
-    from task_queue.task_queue import TaskQueue, TaskType
+# Use task queue from local module
+from task_queue.task_queue import TaskQueue, TaskType
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
