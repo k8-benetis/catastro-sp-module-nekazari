@@ -1,18 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Catastro Spain Module - Custom Styles
+   
+   NOTE: Do NOT include @tailwind directives here. The host application
+   already includes Tailwind CSS. Including them here would reset global
+   styles and break the host's layout.
+*/
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
-}
-
+/* Module specific styles can go here */
