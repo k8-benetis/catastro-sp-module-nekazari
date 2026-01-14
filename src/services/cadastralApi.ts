@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import { NKZClient } from '@nekazari/sdk';
 
 export interface CadastralData {
   cadastralReference: string;
@@ -13,22 +13,50 @@ export interface CadastralData {
   };
 }
 
+// Helper to get auth token from Keycloak or localStorage
+const getAuthToken = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  
+  // Try Keycloak instance first
+  const keycloakInstance = (window as any).keycloak;
+  if (keycloakInstance && keycloakInstance.token) {
+    return keycloakInstance.token;
+  }
+  
+  // Fallback to localStorage
+  return localStorage.getItem('auth_token');
+};
+
+// Helper to get tenant ID from token or default
+const getTenantId = (): string | null => {
+  const token = getAuthToken();
+  if (!token) return null;
+  
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      window.atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    const decoded = JSON.parse(jsonPayload);
+    return decoded['tenant-id'] || decoded.tenant_id || decoded.tenantId || decoded.tenant || null;
+  } catch (e) {
+    console.warn('[CadastralAPI] Failed to decode token for tenant extraction', e);
+    return null;
+  }
+};
+
 class CadastralApiService {
-  private client: AxiosInstance;
+  private client: NKZClient;
 
   constructor() {
-    // Use relative URL - the host will proxy to the correct service
-    this.client = axios.create({
-      baseURL: '/api',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    // Add request interceptor to include auth token
-    this.client.interceptors.request.use((config) => {
-      // Token will be added by the host's axios instance
-      return config;
+    this.client = new NKZClient({
+      baseURL: '/api/cadastral-api',
+      getToken: getAuthToken,
+      getTenantId: getTenantId,
     });
   }
 
@@ -37,12 +65,12 @@ class CadastralApiService {
     latitude: number,
     srs: string = '4326'
   ): Promise<CadastralData> {
-    const response = await this.client.post('/cadastral-api/parcels/query-by-coordinates', {
+    const response = await this.client.post<CadastralData>('/parcels/query-by-coordinates', {
       longitude,
       latitude,
       srs,
     });
-    return response.data;
+    return response;
   }
 }
 
