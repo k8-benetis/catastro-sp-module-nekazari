@@ -32,8 +32,21 @@ export const CadastralMapClickHandler: React.FC = () => {
   const isEntitiesPage = location.pathname === '/entities';
 
   useEffect(() => {
+    console.log('[CadastralMapClickHandler] useEffect triggered', {
+      isEntitiesPage,
+      hasCesiumViewer: !!cesiumViewer,
+      isClickEnabled,
+      isProcessing,
+      hasPendingParcel: !!pendingParcel
+    });
+
     // Only activate if click is enabled and we're on the entities page
     if (!isEntitiesPage || !cesiumViewer || !isClickEnabled) {
+      console.log('[CadastralMapClickHandler] Conditions not met, cleaning up handler', {
+        isEntitiesPage,
+        hasCesiumViewer: !!cesiumViewer,
+        isClickEnabled
+      });
       if (handlerRef.current && !handlerRef.current.isDestroyed()) {
         handlerRef.current.destroy();
         handlerRef.current = null;
@@ -44,24 +57,34 @@ export const CadastralMapClickHandler: React.FC = () => {
     // @ts-ignore
     const Cesium = window.Cesium;
     if (!Cesium) {
+      console.warn('[CadastralMapClickHandler] Cesium not available on window');
       return;
     }
 
-    console.log('[CadastralMapClickHandler] Setting up click handler on Cesium viewer');
+    console.log('[CadastralMapClickHandler] Setting up click handler on Cesium viewer', {
+      canvas: cesiumViewer.scene?.canvas ? 'found' : 'missing'
+    });
 
     // Create click handler
     const handler = new Cesium.ScreenSpaceEventHandler(cesiumViewer.scene.canvas);
     handlerRef.current = handler;
 
     handler.setInputAction(async (click: any) => {
+      console.log('[CadastralMapClickHandler] Click detected!', {
+        isProcessing,
+        hasPendingParcel: !!pendingParcel
+      });
+
       // Check if we're processing a previous click or have a pending dialog
       if (isProcessing || pendingParcel) {
+        console.log('[CadastralMapClickHandler] Click ignored (processing or pending)');
         return;
       }
 
       // Check if clicked on an existing entity
       const pickedObject = cesiumViewer.scene.pick(click.position);
       if (Cesium.defined(pickedObject) && pickedObject.id) {
+        console.log('[CadastralMapClickHandler] Clicked on existing entity, ignoring');
         // Clicked on an entity, don't handle
         return;
       }
