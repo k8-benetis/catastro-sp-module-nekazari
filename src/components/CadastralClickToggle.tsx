@@ -9,6 +9,8 @@ import { useCadastral } from '../context/CadastralContext';
 export const CadastralClickToggle: React.FC = () => {
   const { isClickEnabled, toggleClickEnabled } = useCadastral();
 
+  console.log('[CadastralClickToggle] Render', { isClickEnabled });
+
   return (
     <button
       onClick={toggleClickEnabled}
