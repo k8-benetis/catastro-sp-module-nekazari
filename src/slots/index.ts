@@ -41,3 +41,6 @@ export const moduleSlots: ModuleViewerSlots = {
  */
 export const viewerSlots = moduleSlots;
 
+// Also export as default for Module Federation compatibility
+export default viewerSlots;
+
