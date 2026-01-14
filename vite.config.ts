@@ -11,7 +11,7 @@ export default defineConfig({
       filename: 'remoteEntry.js',
       exposes: {
         './App': './src/App.tsx',
-        './slots': './src/slots/index.ts',
+        './viewerSlots': './src/slots/index.ts',
       },
       shared: {
         'react': {
