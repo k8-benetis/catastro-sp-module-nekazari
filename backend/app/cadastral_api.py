@@ -14,6 +14,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor, Json
 import json
 from datetime import datetime
+import requests
 
 # Add parent directories to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'common'))
@@ -33,6 +34,8 @@ CORS(app)
 
 # Configuration
 POSTGRES_URL = os.getenv('POSTGRES_URL', 'postgresql://postgres:postgres@postgresql-service:5432/nekazari')
+# Entity Manager URL (for NDVI job creation)
+ENTITY_MANAGER_URL = os.getenv('ENTITY_MANAGER_URL', 'http://entity-manager-service:5000')
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -630,18 +633,84 @@ def request_ndvi_processing(parcel_id):
         if not parcel.get('ndvi_enabled', True):
             return jsonify({'error': 'NDVI processing is disabled for this parcel'}), 400
         
-        # Note: NDVI processing is handled by the vegetation-health module
-        # This endpoint just logs the request
-        logger.info(f"NDVI processing requested for parcel {parcel_id} (tenant: {tenant_id})")
+        # Get geometry for the entity-manager request
+        geometry_json = json.loads(parcel.get('geometry', '{}')) if parcel.get('geometry') else None
+        
+        # Get Orion entity ID if available
+        cur.execute("""
+            SELECT orion_entity_id
+            FROM cadastral_parcels
+            WHERE id = %s
+        """, (parcel_id,))
+        orion_result = cur.fetchone()
+        orion_entity_id = orion_result.get('orion_entity_id') if orion_result else None
         
         cur.close()
         conn.close()
         
-        return jsonify({
-            'message': 'NDVI processing request submitted',
-            'parcel_id': parcel_id,
-            'task_type': 'ndvi_processing'
-        }), 202
+        # Forward request to entity-manager
+        # Entity-manager acts as orchestrator and will handle the NDVI job creation
+        try:
+            # Get authorization token from request
+            auth_header = request.headers.get('Authorization', '')
+            
+            # Prepare request to entity-manager
+            entity_manager_payload = {
+                'parcelId': orion_entity_id if orion_entity_id else str(parcel_id),
+                'geometry': geometry_json,
+            }
+            
+            # Add optional parameters
+            if acquisition_date:
+                entity_manager_payload['date'] = acquisition_date
+            if data.get('timeRange'):
+                entity_manager_payload['timeRange'] = data.get('timeRange')
+            if data.get('resolution'):
+                entity_manager_payload['resolution'] = data.get('resolution')
+            if data.get('satellite'):
+                entity_manager_payload['satellite'] = data.get('satellite')
+            if data.get('maxCloudCoverage'):
+                entity_manager_payload['maxCloudCoverage'] = data.get('maxCloudCoverage')
+            
+            # Call entity-manager to create NDVI job
+            entity_manager_headers = {
+                'Authorization': auth_header,
+                'X-Source-Module': 'catastro-spain',
+                'Content-Type': 'application/json'
+            }
+            
+            entity_manager_response = requests.post(
+                f'{ENTITY_MANAGER_URL}/ndvi/jobs',
+                json=entity_manager_payload,
+                headers=entity_manager_headers,
+                timeout=10
+            )
+            
+            if entity_manager_response.status_code in [200, 202]:
+                entity_manager_data = entity_manager_response.json()
+                logger.info(f"NDVI job created via entity-manager for parcel {parcel_id} (tenant: {tenant_id}, job: {entity_manager_data.get('job', {}).get('id')})")
+                
+                return jsonify({
+                    'message': 'NDVI processing request submitted',
+                    'parcel_id': parcel_id,
+                    'job_id': entity_manager_data.get('job', {}).get('id'),
+                    'status': entity_manager_data.get('job', {}).get('status', 'queued'),
+                    'task_type': 'ndvi_processing'
+                }), 202
+            else:
+                error_msg = entity_manager_response.text or 'Unknown error'
+                logger.error(f"Entity-manager returned error {entity_manager_response.status_code}: {error_msg}")
+                return jsonify({
+                    'error': 'Failed to create NDVI job',
+                    'details': error_msg
+                }), entity_manager_response.status_code
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error calling entity-manager for NDVI job: {e}")
+            return jsonify({
+                'error': 'Failed to communicate with entity-manager',
+                'details': str(e)
+            }), 503
         
     except Exception as e:
         logger.error(f"Error requesting NDVI processing: {e}")
@@ -674,20 +743,89 @@ def batch_request_ndvi():
             WHERE id = ANY(%s) AND ndvi_enabled = true
         """, (parcel_ids,))
         
-        valid_parcels = [row['id'] for row in cur.fetchall()]
+        # Get full parcel data for valid parcels
+        cur.execute("""
+            SELECT id, ST_AsGeoJSON(geometry) as geometry, orion_entity_id
+            FROM cadastral_parcels
+            WHERE id = ANY(%s) AND ndvi_enabled = true
+        """, (parcel_ids,))
+        
+        valid_parcels_data = cur.fetchall()
         cur.close()
         conn.close()
         
-        # Note: NDVI processing is handled by the vegetation-health module
-        # This endpoint just logs the request
-        logger.info(f"Batch NDVI processing requested for {len(valid_parcels)} parcels (tenant: {tenant_id})")
+        # Get authorization token from request
+        auth_header = request.headers.get('Authorization', '')
+        
+        # Forward each valid parcel to entity-manager
+        successful_jobs = []
+        failed_jobs = []
+        
+        for parcel_data in valid_parcels_data:
+            parcel_id = parcel_data['id']
+            geometry_json = json.loads(parcel_data.get('geometry', '{}')) if parcel_data.get('geometry') else None
+            orion_entity_id = parcel_data.get('orion_entity_id')
+            
+            try:
+                entity_manager_payload = {
+                    'parcelId': orion_entity_id if orion_entity_id else str(parcel_id),
+                    'geometry': geometry_json,
+                }
+                
+                # Add optional parameters from request
+                if data.get('timeRange'):
+                    entity_manager_payload['timeRange'] = data.get('timeRange')
+                if data.get('resolution'):
+                    entity_manager_payload['resolution'] = data.get('resolution')
+                if data.get('satellite'):
+                    entity_manager_payload['satellite'] = data.get('satellite')
+                if data.get('maxCloudCoverage'):
+                    entity_manager_payload['maxCloudCoverage'] = data.get('maxCloudCoverage')
+                
+                entity_manager_headers = {
+                    'Authorization': auth_header,
+                    'X-Source-Module': 'catastro-spain',
+                    'Content-Type': 'application/json'
+                }
+                
+                entity_manager_response = requests.post(
+                    f'{ENTITY_MANAGER_URL}/ndvi/jobs',
+                    json=entity_manager_payload,
+                    headers=entity_manager_headers,
+                    timeout=10
+                )
+                
+                if entity_manager_response.status_code in [200, 202]:
+                    entity_manager_data = entity_manager_response.json()
+                    successful_jobs.append({
+                        'parcel_id': parcel_id,
+                        'job_id': entity_manager_data.get('job', {}).get('id'),
+                        'status': entity_manager_data.get('job', {}).get('status', 'queued')
+                    })
+                else:
+                    failed_jobs.append({
+                        'parcel_id': parcel_id,
+                        'error': entity_manager_response.text or f"HTTP {entity_manager_response.status_code}"
+                    })
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error calling entity-manager for parcel {parcel_id}: {e}")
+                failed_jobs.append({
+                    'parcel_id': parcel_id,
+                    'error': str(e)
+                })
+        
+        logger.info(f"Batch NDVI processing: {len(successful_jobs)} successful, {len(failed_jobs)} failed (tenant: {tenant_id})")
         
         return jsonify({
-            'message': 'NDVI processing request submitted',
+            'message': 'Batch NDVI processing request completed',
             'requested': len(parcel_ids),
-            'valid': len(valid_parcels),
-            'parcel_ids': valid_parcels
-        }), 202
+            'valid': len(valid_parcels_data),
+            'successful': len(successful_jobs),
+            'failed': len(failed_jobs),
+            'jobs': successful_jobs,
+            'errors': failed_jobs
+        }), 202 if successful_jobs else 207  # 207 Multi-Status if some failed
         
     except Exception as e:
         logger.error(f"Error requesting batch NDVI: {e}")

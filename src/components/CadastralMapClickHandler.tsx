@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useViewerOptional } from '@nekazari/sdk';
-import { cadastralApi } from '../services/cadastralApi';
+import { cadastralApi, CadastralData } from '../services/cadastralApi';
 import { parcelApi } from '../services/parcelApi';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { useCadastral } from '../context/CadastralContext';
+import { CadastralConfirmDialog } from './CadastralConfirmDialog';
 
 /**
  * Component that intercepts map clicks on the /entities page
@@ -13,10 +15,15 @@ export const CadastralMapClickHandler: React.FC = () => {
   const location = useLocation();
   const viewerContext = useViewerOptional();
   const cesiumViewer = viewerContext?.cesiumViewer;
+  const { isClickEnabled } = useCadastral();
   const [isProcessing, setIsProcessing] = useState(false);
   const [notification, setNotification] = useState<{
     type: 'success' | 'error';
     message: string;
+  } | null>(null);
+  const [pendingParcel, setPendingParcel] = useState<{
+    data: CadastralData;
+    area: number;
   } | null>(null);
   const handlerRef = useRef<any>(null);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -25,7 +32,12 @@ export const CadastralMapClickHandler: React.FC = () => {
   const isEntitiesPage = location.pathname === '/entities';
 
   useEffect(() => {
-    if (!isEntitiesPage || !cesiumViewer) {
+    // Only activate if click is enabled and we're on the entities page
+    if (!isEntitiesPage || !cesiumViewer || !isClickEnabled) {
+      if (handlerRef.current && !handlerRef.current.isDestroyed()) {
+        handlerRef.current.destroy();
+        handlerRef.current = null;
+      }
       return;
     }
 
@@ -42,8 +54,8 @@ export const CadastralMapClickHandler: React.FC = () => {
     handlerRef.current = handler;
 
     handler.setInputAction(async (click: any) => {
-      // Check if we're processing a previous click
-      if (isProcessing) {
+      // Check if we're processing a previous click or have a pending dialog
+      if (isProcessing || pendingParcel) {
         return;
       }
 
@@ -80,7 +92,7 @@ export const CadastralMapClickHandler: React.FC = () => {
         handlerRef.current = null;
       }
     };
-  }, [isEntitiesPage, cesiumViewer, isProcessing]);
+  }, [isEntitiesPage, cesiumViewer, isClickEnabled, isProcessing, pendingParcel]);
 
   const handleMapClick = async (longitude: number, latitude: number) => {
     setIsProcessing(true);
@@ -117,33 +129,9 @@ export const CadastralMapClickHandler: React.FC = () => {
       // Calculate area in hectares
       const area = calculatePolygonAreaHectares(cadastralData.geometry!);
 
-      // Create parcel
-      console.log('[CadastralMapClickHandler] Creating parcel...');
-      const newParcel = {
-        name: cadastralData.cadastralReference || `Parcela ${cadastralData.municipality}`,
-        geometry: cadastralData.geometry,
-        municipality: cadastralData.municipality || '',
-        province: cadastralData.province || '',
-        cadastralReference: cadastralData.cadastralReference,
-        cropType: '', // User can edit later
-        area: area,
-        category: 'cadastral',
-        ndviEnabled: true,
-      };
-
-      await parcelApi.createParcel(newParcel);
-
-      setNotification({
-        type: 'success',
-        message: `Parcela ${cadastralData.cadastralReference} añadida correctamente (${area.toFixed(2)} ha)`,
-      });
-
-      clearNotificationAfterDelay();
-
-      // Reload page after a short delay to show the new parcel
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
+      // Show confirmation dialog instead of creating immediately
+      setPendingParcel({ data: cadastralData, area });
+      setIsProcessing(false);
 
     } catch (error: any) {
       console.error('[CadastralMapClickHandler] Error:', error);
@@ -210,6 +198,59 @@ export const CadastralMapClickHandler: React.FC = () => {
     return Number((areaSqMeters / 10_000).toFixed(4)); // Convert to hectares
   };
 
+  const handleConfirmParcel = async () => {
+    if (!pendingParcel) return;
+
+    setIsProcessing(true);
+    setPendingParcel(null);
+
+    try {
+      const { data: cadastralData, area } = pendingParcel;
+
+      console.log('[CadastralMapClickHandler] Creating parcel...');
+      const newParcel = {
+        name: cadastralData.cadastralReference || `Parcela ${cadastralData.municipality}`,
+        geometry: cadastralData.geometry!,
+        municipality: cadastralData.municipality || '',
+        province: cadastralData.province || '',
+        cadastralReference: cadastralData.cadastralReference,
+        cropType: '', // User can edit later
+        area: area,
+        category: 'cadastral',
+        ndviEnabled: true,
+      };
+
+      await parcelApi.createParcel(newParcel);
+
+      setNotification({
+        type: 'success',
+        message: `Parcela ${cadastralData.cadastralReference} añadida correctamente (${area.toFixed(2)} ha)`,
+      });
+
+      clearNotificationAfterDelay();
+
+      // Reload entities in the viewer after a short delay
+      setTimeout(() => {
+        viewerContext?.loadAllEntities?.();
+      }, 1500);
+    } catch (error: any) {
+      console.error('[CadastralMapClickHandler] Error creating parcel:', error);
+      const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message || 'Error al crear la parcela';
+      setNotification({
+        type: 'error',
+        message: errorMessage,
+      });
+      clearNotificationAfterDelay();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCancelParcel = () => {
+    setPendingParcel(null);
+    setIsProcessing(false);
+  };
+
   if (!isEntitiesPage) {
     return null;
   }
@@ -217,11 +258,22 @@ export const CadastralMapClickHandler: React.FC = () => {
   return (
     <>
       {/* Processing indicator */}
-      {isProcessing && (
+      {isProcessing && !pendingParcel && (
         <div className="fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border border-gray-200 p-4 flex items-center gap-3 min-w-[300px]">
           <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
           <span className="text-sm text-gray-700">Consultando catastro...</span>
         </div>
+      )}
+
+      {/* Confirmation Dialog */}
+      {pendingParcel && (
+        <CadastralConfirmDialog
+          cadastralData={pendingParcel.data}
+          area={pendingParcel.area}
+          onConfirm={handleConfirmParcel}
+          onCancel={handleCancelParcel}
+          isProcessing={isProcessing}
+        />
       )}
 
       {/* Notification */}

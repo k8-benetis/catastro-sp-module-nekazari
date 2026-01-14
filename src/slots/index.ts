@@ -1,4 +1,7 @@
+import React from 'react';
 import { CadastralMapClickHandler } from '../components/CadastralMapClickHandler';
+import { CadastralClickToggle } from '../components/CadastralClickToggle';
+import { CadastralProvider } from '../context/CadastralContext';
 import type { ModuleViewerSlots, SlotWidgetDefinition } from '@nekazari/sdk';
 
 /**
@@ -6,7 +9,7 @@ import type { ModuleViewerSlots, SlotWidgetDefinition } from '@nekazari/sdk';
  * 
  * This module adds click-to-add functionality for cadastral parcels
  * on the /entities page. When a user clicks on the map, it queries
- * the cadastral service and automatically creates a parcel if found.
+ * the cadastral service and shows a confirmation dialog before creating the parcel.
  */
 export const moduleSlots: ModuleViewerSlots = {
   'map-layer': [
@@ -17,6 +20,20 @@ export const moduleSlots: ModuleViewerSlots = {
       localComponent: CadastralMapClickHandler,
     },
   ],
+  'layer-toggle': [
+    {
+      id: 'catastro-spain-click-toggle',
+      component: 'CadastralClickToggle',
+      priority: 20, // Lower priority = higher in list
+      localComponent: CadastralClickToggle,
+    },
+  ],
+  'context-panel': [],
+  'bottom-panel': [],
+  'entity-tree': [],
+  
+  // Provider for sharing state between components
+  moduleProvider: CadastralProvider,
 };
 
 /**

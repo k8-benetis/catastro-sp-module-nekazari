@@ -64,6 +64,9 @@ spec:
                 secretKeyRef:
                   name: postgresql-secret
                   key: postgres-url
+            # Entity Manager URL (for NDVI job orchestration)
+            - name: ENTITY_MANAGER_URL
+              value: "http://entity-manager-service:5000"
           resources:
             requests:
               memory: "128Mi"
