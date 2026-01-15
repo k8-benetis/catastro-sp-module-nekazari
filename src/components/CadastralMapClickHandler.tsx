@@ -67,394 +67,391 @@ export const CadastralMapClickHandler: React.FC = () => {
     type: 'success' | 'error' | 'warning';
     message: string;
   } | null>(null);
-  const [pendingParcel, setPendingParcel] = useState < {
+  const [pendingParcel, setPendingParcel] = useState<{
     data: CadastralData;
     area: number;
-    const [pendingParcel, setPendingParcel] = useState<{
-      data: CadastralData;
-      area: number;
-    } | null>(null);
-    const [candidates, setCandidates] = useState<CadastralData[] | null>(null);
-    const handlerRef = useRef<any>(null);
-    const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const timerRef = useRef<NodeJS.Timeout | null>(null);
+  } | null>(null);
+  const [candidates, setCandidates] = useState<CadastralData[] | null>(null);
+  const handlerRef = useRef<any>(null);
+  const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Only activate on /entities page
-    const isEntitiesPage = location.pathname === '/entities';
+  // Only activate on /entities page
+  const isEntitiesPage = location.pathname === '/entities';
 
-    useEffect(() => {
-  console.log('[CadastralMapClickHandler] useEffect triggered', {
-    isEntitiesPage,
-    hasCesiumViewer: !!cesiumViewer,
-    isClickEnabled,
-    isProcessing,
-    hasPendingParcel: !!pendingParcel
-  });
-
-  // Only activate if click is enabled and we're on the entities page
-  if (!isEntitiesPage || !cesiumViewer || !isClickEnabled) {
-    console.log('[CadastralMapClickHandler] Conditions not met, cleaning up handler', {
+  useEffect(() => {
+    console.log('[CadastralMapClickHandler] useEffect triggered', {
       isEntitiesPage,
       hasCesiumViewer: !!cesiumViewer,
-      isClickEnabled
-    });
-    if (handlerRef.current && !handlerRef.current.isDestroyed()) {
-      handlerRef.current.destroy();
-      handlerRef.current = null;
-    }
-    return;
-  }
-
-  // @ts-ignore
-  const Cesium = window.Cesium;
-  if (!Cesium) {
-    console.warn('[CadastralMapClickHandler] Cesium not available on window');
-    return;
-  }
-
-  console.log('[CadastralMapClickHandler] Setting up click handler on Cesium viewer', {
-    canvas: cesiumViewer.scene?.canvas ? 'found' : 'missing'
-  });
-
-  // Create click handler
-  const handler = new Cesium.ScreenSpaceEventHandler(cesiumViewer.scene.canvas);
-  handlerRef.current = handler;
-
-  handler.setInputAction(async (click: any) => {
-    console.log('[CadastralMapClickHandler] Click detected!', {
+      isClickEnabled,
       isProcessing,
       hasPendingParcel: !!pendingParcel
     });
 
-    // Check if we're processing a previous click or have a pending dialog
-    if (isProcessing || pendingParcel || candidates) {
-      console.log('[CadastralMapClickHandler] Click ignored (processing or pending)');
+    // Only activate if click is enabled and we're on the entities page
+    if (!isEntitiesPage || !cesiumViewer || !isClickEnabled) {
+      console.log('[CadastralMapClickHandler] Conditions not met, cleaning up handler', {
+        isEntitiesPage,
+        hasCesiumViewer: !!cesiumViewer,
+        isClickEnabled
+      });
+      if (handlerRef.current && !handlerRef.current.isDestroyed()) {
+        handlerRef.current.destroy();
+        handlerRef.current = null;
+      }
       return;
     }
 
-    // Check if clicked on an existing entity
-    const pickedObject = cesiumViewer.scene.pick(click.position);
-    if (Cesium.defined(pickedObject) && pickedObject.id) {
-      console.log('[CadastralMapClickHandler] Clicked on existing entity, ignoring');
-      // Clicked on an entity, don't handle
+    // @ts-ignore
+    const Cesium = window.Cesium;
+    if (!Cesium) {
+      console.warn('[CadastralMapClickHandler] Cesium not available on window');
       return;
     }
 
-    // Get coordinates from click
-    let cartesian = cesiumViewer.scene.pickPosition(click.position);
-    if (!cartesian) {
-      cartesian = cesiumViewer.camera.pickEllipsoid(click.position, cesiumViewer.scene.globe.ellipsoid);
-    }
+    console.log('[CadastralMapClickHandler] Setting up click handler on Cesium viewer', {
+      canvas: cesiumViewer.scene?.canvas ? 'found' : 'missing'
+    });
 
-    if (!cartesian) {
-      return;
-    }
+    // Create click handler
+    const handler = new Cesium.ScreenSpaceEventHandler(cesiumViewer.scene.canvas);
+    handlerRef.current = handler;
 
-    const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
-    const longitude = Cesium.Math.toDegrees(cartographic.longitude);
-    const latitude = Cesium.Math.toDegrees(cartographic.latitude);
+    handler.setInputAction(async (click: any) => {
+      console.log('[CadastralMapClickHandler] Click detected!', {
+        isProcessing,
+        hasPendingParcel: !!pendingParcel
+      });
 
-    console.log('[CadastralMapClickHandler] Map clicked at:', { longitude, latitude });
+      // Check if we're processing a previous click or have a pending dialog
+      if (isProcessing || pendingParcel || candidates) {
+        console.log('[CadastralMapClickHandler] Click ignored (processing or pending)');
+        return;
+      }
 
-    // Process the click
-    await handleMapClick(longitude, latitude);
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+      // Check if clicked on an existing entity
+      const pickedObject = cesiumViewer.scene.pick(click.position);
+      if (Cesium.defined(pickedObject) && pickedObject.id) {
+        console.log('[CadastralMapClickHandler] Clicked on existing entity, ignoring');
+        // Clicked on an entity, don't handle
+        return;
+      }
 
-  return () => {
-    if (handlerRef.current && !handlerRef.current.isDestroyed()) {
-      handlerRef.current.destroy();
-      handlerRef.current = null;
+      // Get coordinates from click
+      let cartesian = cesiumViewer.scene.pickPosition(click.position);
+      if (!cartesian) {
+        cartesian = cesiumViewer.camera.pickEllipsoid(click.position, cesiumViewer.scene.globe.ellipsoid);
+      }
+
+      if (!cartesian) {
+        return;
+      }
+
+      const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+      const longitude = Cesium.Math.toDegrees(cartographic.longitude);
+      const latitude = Cesium.Math.toDegrees(cartographic.latitude);
+
+      console.log('[CadastralMapClickHandler] Map clicked at:', { longitude, latitude });
+
+      // Process the click
+      await handleMapClick(longitude, latitude);
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    return () => {
+      if (handlerRef.current && !handlerRef.current.isDestroyed()) {
+        handlerRef.current.destroy();
+        handlerRef.current = null;
+      }
+    };
+  }, [isEntitiesPage, cesiumViewer, isClickEnabled, isProcessing, pendingParcel, candidates]);
+
+  const handleMapClick = async (longitude: number, latitude: number) => {
+    setIsProcessing(true);
+    setNotification(null);
+    setElapsedSeconds(0);
+
+    // Start elapsed time counter
+    timerRef.current = setInterval(() => {
+      setElapsedSeconds(prev => prev + 1);
+    }, 1000);
+
+    try {
+      console.log('[CadastralMapClickHandler] Querying cadastral service...');
+      const cadastralData = await cadastralApi.queryByCoordinates(longitude, latitude);
+
+      // Clear timer on success
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      // Retrieve candidates list if available (or wrap single result)
+      const candidatesList = cadastralData.candidates && cadastralData.candidates.length > 0
+        ? cadastralData.candidates
+        : [cadastralData];
+
+      if (candidatesList.length > 1) {
+        console.log(`[CadastralMapClickHandler] Found ${candidatesList.length} candidates, showing selection dialog`);
+        setCandidates(candidatesList);
+        setIsProcessing(false);
+        return;
+      }
+
+      // Single result flow
+      const primary = candidatesList[0];
+      await processSelectedCandidate(primary);
+
+    } catch (error: any) {
+      console.error('[CadastralMapClickHandler] Error:', error);
+
+      // Clear timer on error
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      const { message, type } = getErrorMessage(error);
+      setNotification({
+        type: type === 'not_found' ? 'warning' : 'error',
+        message,
+      });
+      clearNotificationAfterDelay(type === 'timeout' ? 8000 : 5000);
+    } finally {
+      setIsProcessing(false);
+      setElapsedSeconds(0);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     }
   };
-}, [isEntitiesPage, cesiumViewer, isClickEnabled, isProcessing, pendingParcel, candidates]);
 
-const handleMapClick = async (longitude: number, latitude: number) => {
-  setIsProcessing(true);
-  setNotification(null);
-  setElapsedSeconds(0);
-
-  // Start elapsed time counter
-  timerRef.current = setInterval(() => {
-    setElapsedSeconds(prev => prev + 1);
-  }, 1000);
-
-  try {
-    console.log('[CadastralMapClickHandler] Querying cadastral service...');
-    const cadastralData = await cadastralApi.queryByCoordinates(longitude, latitude);
-
-    // Clear timer on success
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+  const clearNotificationAfterDelay = (delay: number = 5000) => {
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
     }
+    notificationTimeoutRef.current = setTimeout(() => {
+      setNotification(null);
+    }, delay);
+  };
 
-    // Retrieve candidates list if available (or wrap single result)
-    const candidatesList = cadastralData.candidates && cadastralData.candidates.length > 0
-      ? cadastralData.candidates
-      : [cadastralData];
+  const processSelectedCandidate = async (data: CadastralData) => {
+    // Validate geometry
+    const hasGeometry = data.geometry &&
+      (data.geometry.type === 'Polygon' || data.geometry.type === 'MultiPolygon') &&
+      data.geometry.coordinates &&
+      data.geometry.coordinates.length > 0;
 
-    if (candidatesList.length > 1) {
-      console.log(`[CadastralMapClickHandler] Found ${candidatesList.length} candidates, showing selection dialog`);
-      setCandidates(candidatesList);
+    if (!hasGeometry) {
+      setNotification({
+        type: 'warning',
+        message: 'La entidad seleccionada no tiene geometría disponible.',
+      });
+      clearNotificationAfterDelay();
       setIsProcessing(false);
       return;
     }
 
-    // Single result flow
-    const primary = candidatesList[0];
-    await processSelectedCandidate(primary);
+    // Calculate area
+    const area = calculatePolygonAreaHectares(data.geometry!);
 
-  } catch (error: any) {
-    console.error('[CadastralMapClickHandler] Error:', error);
+    // Show confirmation
+    setPendingParcel({ data, area });
+    setCandidates(null);
+    setIsProcessing(false);
+  };
 
-    // Clear timer on error
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+  const handleSelectCandidate = (candidate: CadastralData) => {
+    // If we need to fetch geometry specifically for this candidate, we could do it here.
+    // However, backend should have pre-warmed geometries for top candidates.
+    // If geometry is missing, processSelectedCandidate will show warning.
+    processSelectedCandidate(candidate);
+  };
+
+  const handleCancelSelection = () => {
+    setCandidates(null);
+    setIsProcessing(false);
+  };
+
+  // Calculate polygon area in hectares using equirectangular projection
+  // Supports Polygon and MultiPolygon
+  const calculatePolygonAreaHectares = (geometry: { type: string; coordinates: any[] }): number => {
+    if (!geometry || !geometry.coordinates || geometry.coordinates.length === 0) {
+      return 0;
     }
 
-    const { message, type } = getErrorMessage(error);
-    setNotification({
-      type: type === 'not_found' ? 'warning' : 'error',
-      message,
-    });
-    clearNotificationAfterDelay(type === 'timeout' ? 8000 : 5000);
-  } finally {
-    setIsProcessing(false);
-    setElapsedSeconds(0);
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+    if (geometry.type === 'Polygon') {
+      return calculateSinglePolygonArea(geometry.coordinates);
     }
-  }
-};
 
-const clearNotificationAfterDelay = (delay: number = 5000) => {
-  if (notificationTimeoutRef.current) {
-    clearTimeout(notificationTimeoutRef.current);
-  }
-  notificationTimeoutRef.current = setTimeout(() => {
-    setNotification(null);
-  }, delay);
-};
+    if (geometry.type === 'MultiPolygon') {
+      return geometry.coordinates.reduce((total, polyCoords) => {
+        return total + calculateSinglePolygonArea(polyCoords);
+      }, 0);
+    }
 
-const processSelectedCandidate = async (data: CadastralData) => {
-  // Validate geometry
-  const hasGeometry = data.geometry &&
-    (data.geometry.type === 'Polygon' || data.geometry.type === 'MultiPolygon') &&
-    data.geometry.coordinates &&
-    data.geometry.coordinates.length > 0;
+    return 0;
+  };
 
-  if (!hasGeometry) {
-    setNotification({
-      type: 'warning',
-      message: 'La entidad seleccionada no tiene geometría disponible.',
+  const calculateSinglePolygonArea = (coordinates: number[][][]): number => {
+    const ring = coordinates[0]; // First ring (exterior)
+    if (!ring || ring.length < 4) {
+      return 0;
+    }
+
+    // Remove duplicate closing point for calculations
+    const coords = ring.slice(0, -1);
+    if (coords.length < 3) {
+      return 0;
+    }
+
+    // Calculate average latitude for projection
+    const lat0 = coords.reduce((sum, [, lat]) => sum + lat, 0) / coords.length;
+    const lat0Rad = (lat0 * Math.PI) / 180;
+
+    const EARTH_RADIUS_METERS = 6378137;
+
+    // Project coordinates to meters using equirectangular projection
+    const projected = coords.map(([lon, lat]) => {
+      const x = ((lon * Math.PI) / 180) * EARTH_RADIUS_METERS * Math.cos(lat0Rad);
+      const y = ((lat * Math.PI) / 180) * EARTH_RADIUS_METERS;
+      return [x, y] as [number, number];
     });
-    clearNotificationAfterDelay();
+
+    // Shoelace formula
+    let area = 0;
+    for (let i = 0; i < projected.length; i++) {
+      const [x1, y1] = projected[i];
+      const [x2, y2] = projected[(i + 1) % projected.length];
+      area += x1 * y2 - x2 * y1;
+    }
+
+    const areaSqMeters = Math.abs(area) / 2;
+    return Number((areaSqMeters / 10_000).toFixed(4)); // Convert to hectares
+  };
+
+  const handleConfirmParcel = async () => {
+    if (!pendingParcel) return;
+
+    setIsProcessing(true);
+    setPendingParcel(null);
+
+    try {
+      const { data: cadastralData, area } = pendingParcel;
+
+      console.log('[CadastralMapClickHandler] Creating parcel...');
+      const newParcel = {
+        name: cadastralData.cadastralReference || `Parcela ${cadastralData.municipality}`,
+        geometry: cadastralData.geometry!,
+        municipality: cadastralData.municipality || '',
+        province: cadastralData.province || '',
+        cadastralReference: cadastralData.cadastralReference,
+        cropType: '', // User can edit later
+        area: area,
+        category: 'cadastral',
+        ndviEnabled: true,
+      };
+
+      await parcelApi.createParcel(newParcel);
+
+      setNotification({
+        type: 'success',
+        message: `Parcela ${cadastralData.cadastralReference} añadida correctamente (${area.toFixed(2)} ha)`,
+      });
+
+      clearNotificationAfterDelay();
+
+      // Reload entities in the viewer after a short delay
+      setTimeout(() => {
+        viewerContext?.loadAllEntities?.();
+      }, 1500);
+    } catch (error: any) {
+      console.error('[CadastralMapClickHandler] Error creating parcel:', error);
+      const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message || 'Error al crear la parcela';
+      setNotification({
+        type: 'error',
+        message: errorMessage,
+      });
+      clearNotificationAfterDelay();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCancelParcel = () => {
+    setPendingParcel(null);
     setIsProcessing(false);
-    return;
+  };
+
+  if (!isEntitiesPage) {
+    return null;
   }
 
-  // Calculate area
-  const area = calculatePolygonAreaHectares(data.geometry!);
-
-  // Show confirmation
-  setPendingParcel({ data, area });
-  setCandidates(null);
-  setIsProcessing(false);
-};
-
-const handleSelectCandidate = (candidate: CadastralData) => {
-  // If we need to fetch geometry specifically for this candidate, we could do it here.
-  // However, backend should have pre-warmed geometries for top candidates.
-  // If geometry is missing, processSelectedCandidate will show warning.
-  processSelectedCandidate(candidate);
-};
-
-const handleCancelSelection = () => {
-  setCandidates(null);
-  setIsProcessing(false);
-};
-
-// Calculate polygon area in hectares using equirectangular projection
-// Supports Polygon and MultiPolygon
-const calculatePolygonAreaHectares = (geometry: { type: string; coordinates: any[] }): number => {
-  if (!geometry || !geometry.coordinates || geometry.coordinates.length === 0) {
-    return 0;
-  }
-
-  if (geometry.type === 'Polygon') {
-    return calculateSinglePolygonArea(geometry.coordinates);
-  }
-
-  if (geometry.type === 'MultiPolygon') {
-    return geometry.coordinates.reduce((total, polyCoords) => {
-      return total + calculateSinglePolygonArea(polyCoords);
-    }, 0);
-  }
-
-  return 0;
-};
-
-const calculateSinglePolygonArea = (coordinates: number[][][]): number => {
-  const ring = coordinates[0]; // First ring (exterior)
-  if (!ring || ring.length < 4) {
-    return 0;
-  }
-
-  // Remove duplicate closing point for calculations
-  const coords = ring.slice(0, -1);
-  if (coords.length < 3) {
-    return 0;
-  }
-
-  // Calculate average latitude for projection
-  const lat0 = coords.reduce((sum, [, lat]) => sum + lat, 0) / coords.length;
-  const lat0Rad = (lat0 * Math.PI) / 180;
-
-  const EARTH_RADIUS_METERS = 6378137;
-
-  // Project coordinates to meters using equirectangular projection
-  const projected = coords.map(([lon, lat]) => {
-    const x = ((lon * Math.PI) / 180) * EARTH_RADIUS_METERS * Math.cos(lat0Rad);
-    const y = ((lat * Math.PI) / 180) * EARTH_RADIUS_METERS;
-    return [x, y] as [number, number];
-  });
-
-  // Shoelace formula
-  let area = 0;
-  for (let i = 0; i < projected.length; i++) {
-    const [x1, y1] = projected[i];
-    const [x2, y2] = projected[(i + 1) % projected.length];
-    area += x1 * y2 - x2 * y1;
-  }
-
-  const areaSqMeters = Math.abs(area) / 2;
-  return Number((areaSqMeters / 10_000).toFixed(4)); // Convert to hectares
-};
-
-const handleConfirmParcel = async () => {
-  if (!pendingParcel) return;
-
-  setIsProcessing(true);
-  setPendingParcel(null);
-
-  try {
-    const { data: cadastralData, area } = pendingParcel;
-
-    console.log('[CadastralMapClickHandler] Creating parcel...');
-    const newParcel = {
-      name: cadastralData.cadastralReference || `Parcela ${cadastralData.municipality}`,
-      geometry: cadastralData.geometry!,
-      municipality: cadastralData.municipality || '',
-      province: cadastralData.province || '',
-      cadastralReference: cadastralData.cadastralReference,
-      cropType: '', // User can edit later
-      area: area,
-      category: 'cadastral',
-      ndviEnabled: true,
-    };
-
-    await parcelApi.createParcel(newParcel);
-
-    setNotification({
-      type: 'success',
-      message: `Parcela ${cadastralData.cadastralReference} añadida correctamente (${area.toFixed(2)} ha)`,
-    });
-
-    clearNotificationAfterDelay();
-
-    // Reload entities in the viewer after a short delay
-    setTimeout(() => {
-      viewerContext?.loadAllEntities?.();
-    }, 1500);
-  } catch (error: any) {
-    console.error('[CadastralMapClickHandler] Error creating parcel:', error);
-    const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message || 'Error al crear la parcela';
-    setNotification({
-      type: 'error',
-      message: errorMessage,
-    });
-    clearNotificationAfterDelay();
-  } finally {
-    setIsProcessing(false);
-  }
-};
-
-const handleCancelParcel = () => {
-  setPendingParcel(null);
-  setIsProcessing(false);
-};
-
-if (!isEntitiesPage) {
-  return null;
-}
-
-return (
-  <>
-    {/* Processing indicator with elapsed time */}
-    {isProcessing && !pendingParcel && (
-      <div className="fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border border-gray-200 p-4 flex items-center gap-3 min-w-[300px]">
-        <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
-        <div className="flex flex-col">
-          <span className="text-sm text-gray-700">Consultando catastro...</span>
-          {elapsedSeconds > 0 && (
-            <span className="text-xs text-gray-500 flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              {elapsedSeconds}s
-              {elapsedSeconds >= 5 && ' - El servicio está tardando más de lo habitual'}
-            </span>
-          )}
+  return (
+    <>
+      {/* Processing indicator with elapsed time */}
+      {isProcessing && !pendingParcel && (
+        <div className="fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border border-gray-200 p-4 flex items-center gap-3 min-w-[300px]">
+          <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
+          <div className="flex flex-col">
+            <span className="text-sm text-gray-700">Consultando catastro...</span>
+            {elapsedSeconds > 0 && (
+              <span className="text-xs text-gray-500 flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {elapsedSeconds}s
+                {elapsedSeconds >= 5 && ' - El servicio está tardando más de lo habitual'}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
-    )}
+      )}
 
-    {/* Selection Dialog */}
-    {candidates && (
-      <CadastralSelectionDialog
-        candidates={candidates}
-        onSelect={handleSelectCandidate}
-        onCancel={handleCancelSelection}
-      />
-    )}
+      {/* Selection Dialog */}
+      {candidates && (
+        <CadastralSelectionDialog
+          candidates={candidates}
+          onSelect={handleSelectCandidate}
+          onCancel={handleCancelSelection}
+        />
+      )}
 
-    {/* Confirmation Dialog */}
-    {pendingParcel && (
-      <CadastralConfirmDialog
-        cadastralData={pendingParcel.data}
-        area={pendingParcel.area}
-        onConfirm={handleConfirmParcel}
-        onCancel={handleCancelParcel}
-        isProcessing={isProcessing}
-      />
-    )}
+      {/* Confirmation Dialog */}
+      {pendingParcel && (
+        <CadastralConfirmDialog
+          cadastralData={pendingParcel.data}
+          area={pendingParcel.area}
+          onConfirm={handleConfirmParcel}
+          onCancel={handleCancelParcel}
+          isProcessing={isProcessing}
+        />
+      )}
 
-    {/* Notification */}
-    {notification && (
-      <div className={`fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border ${notification.type === 'success'
-        ? 'border-green-200'
-        : notification.type === 'warning'
-          ? 'border-yellow-200'
-          : 'border-red-200'
-        } p-4 flex items-center gap-3 min-w-[300px] max-w-[400px]`}>
-        {notification.type === 'success' ? (
-          <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
-        ) : notification.type === 'warning' ? (
-          <XCircle className="w-5 h-5 text-yellow-600 flex-shrink-0" />
-        ) : (
-          <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-        )}
-        <span className={`text-sm ${notification.type === 'success'
-          ? 'text-green-700'
+      {/* Notification */}
+      {notification && (
+        <div className={`fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border ${notification.type === 'success'
+          ? 'border-green-200'
           : notification.type === 'warning'
-            ? 'text-yellow-700'
-            : 'text-red-700'
-          }`}>
-          {notification.message}
-        </span>
-      </div>
-    )}
-  </>
-);
+            ? 'border-yellow-200'
+            : 'border-red-200'
+          } p-4 flex items-center gap-3 min-w-[300px] max-w-[400px]`}>
+          {notification.type === 'success' ? (
+            <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
+          ) : notification.type === 'warning' ? (
+            <XCircle className="w-5 h-5 text-yellow-600 flex-shrink-0" />
+          ) : (
+            <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+          )}
+          <span className={`text-sm ${notification.type === 'success'
+            ? 'text-green-700'
+            : notification.type === 'warning'
+              ? 'text-yellow-700'
+              : 'text-red-700'
+            }`}>
+            {notification.message}
+          </span>
+        </div>
+      )}
+    </>
+  );
 };
 
