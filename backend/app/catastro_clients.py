@@ -1330,6 +1330,78 @@ class SpanishStateCatastroClient:
             logger.error(f"Error parsing SOAP XML response: {e}", exc_info=True)
             return None
 
+    def _parse_soap_response_candidates(self, result: Any) -> List[Dict[str, Any]]:
+        """Parse SOAP response to extract ALL candidates (multiple coord elements)."""
+        candidates = []
+        try:
+            # Navigate to coord list
+            coord_list = None
+            if hasattr(result, 'coordenadas') and hasattr(result.coordenadas, 'coord'):
+                coord_list = result.coordenadas.coord
+            elif hasattr(result, 'coord'):
+                coord_list = result.coord
+            else:
+                coord_list = result
+            
+            if coord_list is None:
+                return []
+            
+            # Ensure it's a list
+            if hasattr(coord_list, '__iter__') and not isinstance(coord_list, str):
+                coord_list = list(coord_list)
+            else:
+                coord_list = [coord_list]
+            
+            # Process each coord element
+            for coord in coord_list:
+                candidate = {}
+                if hasattr(coord, 'find') and hasattr(coord, 'iter'):
+                    # Extract cadastral reference
+                    pc_elem = coord.find('.//pc') or coord.find('pc')
+                    if pc_elem is not None:
+                        pc_parts = []
+                        for pc_num in ['pc1', 'pc2', 'pc3', 'pc4', 'pc5', 'pc6', 'pc7']:
+                            pc_val = pc_elem.find(pc_num)
+                            if pc_val is not None and pc_val.text:
+                                pc_text = pc_val.text.strip()
+                                if pc_text:
+                                    if pc_num == 'pc1':
+                                        pc_parts.append(pc_text.zfill(2))
+                                    elif pc_num == 'pc2':
+                                        pc_parts.append(pc_text.zfill(3))
+                                    elif pc_num in ['pc3', 'pc7']:
+                                        pc_parts.append(pc_text)
+                                    elif pc_num == 'pc4':
+                                        pc_parts.append(pc_text.zfill(3))
+                                    elif pc_num == 'pc5':
+                                        pc_parts.append(pc_text.zfill(5))
+                                    elif pc_num == 'pc6':
+                                        pc_parts.append(pc_text.zfill(4))
+                        if pc_parts:
+                            candidate['cadastralReference'] = '-'.join(pc_parts)
+                    
+                    # Extract address
+                    ldt_elem = coord.find('.//ldt') or coord.find('ldt')
+                    if ldt_elem is not None:
+                        all_text = "".join(ldt_elem.itertext()).strip()
+                        if all_text:
+                            candidate['address'] = all_text
+                
+                # Only add if we have cadastral reference
+                if candidate.get('cadastralReference'):
+                    if candidate.get('address'):
+                        muni, prov = self._extract_municipality_province(candidate['address'])
+                        candidate['municipality'] = muni
+                        candidate['province'] = prov
+                    candidate['region'] = 'spain'
+                    candidate['geometry'] = None
+                    candidates.append(candidate)
+            
+            return candidates
+        except Exception as e:
+            logger.error(f"Error parsing SOAP candidates: {e}", exc_info=True)
+            return []
+
     def _parse_soap_response(self, result: Any) -> Optional[Dict[str, Any]]:
         """
         Parse SOAP response into a dictionary.
