@@ -2074,13 +2074,4 @@ class EuskadiCatastroClient:
         except Exception as e:
             logger.error(f"Error processing Euskadi feature: {e}")
             return None
-            else:
-                logger.debug("No features found in Euskadi WFS response")
-                return None
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error querying Euskadi WFS: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error querying Euskadi cadastre: {e}", exc_info=True)
-            return None
+
