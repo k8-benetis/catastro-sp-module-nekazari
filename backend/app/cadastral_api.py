@@ -7,7 +7,7 @@
 import os
 import sys
 import logging
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, g, Blueprint
 from flask_cors import CORS
 from typing import Dict, Any, List, Optional
 import psycopg2
@@ -41,6 +41,9 @@ ENTITY_MANAGER_URL = os.getenv('ENTITY_MANAGER_URL', 'http://entity-manager-serv
 def health():
     """Health check endpoint"""
     return jsonify({'status': 'healthy', 'service': 'cadastral-api'}), 200
+
+# Create Blueprint for API routes with prefix
+api_bp = Blueprint('api', __name__, url_prefix='/api/cadastral-api')
 
 # =============================================================================
 # Orion-LD Synchronization Endpoint
@@ -184,7 +187,7 @@ def orion_notification():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/parcels', methods=['GET'])
+@api_bp.route('/parcels', methods=['GET'])
 @require_auth
 def list_parcels():
     """List all parcels for current tenant"""
@@ -235,7 +238,7 @@ def list_parcels():
         logger.error(f"Error listing parcels: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels', methods=['POST'])
+@api_bp.route('/parcels', methods=['POST'])
 @require_auth
 def create_parcel():
     """Create a new cadastral parcel"""
@@ -369,7 +372,7 @@ def create_parcel():
         logger.error(f"Unexpected error in create_parcel: {e}", exc_info=True)
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
-@app.route('/parcels/<parcel_id>', methods=['GET'])
+@api_bp.route('/parcels/<parcel_id>', methods=['GET'])
 @require_auth
 def get_parcel(parcel_id):
     """Get a specific parcel by ID"""
@@ -426,7 +429,7 @@ def get_parcel(parcel_id):
         logger.error(f"Error getting parcel: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels/<parcel_id>', methods=['PUT'])
+@api_bp.route('/parcels/<parcel_id>', methods=['PUT'])
 @require_auth
 def update_parcel(parcel_id):
     """Update a parcel"""
@@ -490,7 +493,7 @@ def update_parcel(parcel_id):
         logger.error(f"Error updating parcel: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels/<parcel_id>', methods=['DELETE'])
+@api_bp.route('/parcels/<parcel_id>', methods=['DELETE'])
 @require_auth
 def delete_parcel(parcel_id):
     """Soft delete a parcel (set is_active = false)"""
@@ -528,7 +531,7 @@ def delete_parcel(parcel_id):
         logger.error(f"Error deleting parcel: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels/summary', methods=['GET'])
+@api_bp.route('/parcels/summary', methods=['GET'])
 @require_auth
 def get_summary():
     """Get summary statistics for tenant parcels"""
@@ -567,7 +570,7 @@ def get_summary():
         logger.error(f"Error getting summary: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels/check-cadastral', methods=['POST'])
+@api_bp.route('/parcels/check-cadastral', methods=['POST'])
 @require_auth
 def check_cadastral_reference():
     """Check if cadastral reference exists for tenant"""
@@ -607,7 +610,7 @@ def check_cadastral_reference():
         logger.error(f"Error checking cadastral: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels/<parcel_id>/request-ndvi', methods=['POST'])
+@api_bp.route('/parcels/<parcel_id>/request-ndvi', methods=['POST'])
 @require_auth
 def request_ndvi_processing(parcel_id):
     """Request NDVI processing for a parcel"""
@@ -725,7 +728,7 @@ def request_ndvi_processing(parcel_id):
         logger.error(f"Error requesting NDVI processing: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels/batch-request-ndvi', methods=['POST'])
+@api_bp.route('/parcels/batch-request-ndvi', methods=['POST'])
 @require_auth
 def batch_request_ndvi():
     """Request NDVI processing for multiple parcels"""
@@ -840,7 +843,7 @@ def batch_request_ndvi():
         logger.error(f"Error requesting batch NDVI: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/parcels/query-by-coordinates', methods=['POST'])
+@api_bp.route('/parcels/query-by-coordinates', methods=['POST'])
 @require_auth
 def query_by_coordinates():
     """
@@ -1059,5 +1062,7 @@ def query_by_coordinates():
         }), 500
 
 if __name__ == '__main__':
+    # Register blueprint
+    app.register_blueprint(api_bp)
     app.run(host='0.0.0.0', port=5000, debug=True)
 
