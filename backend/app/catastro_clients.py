@@ -138,26 +138,56 @@ class WFSCapabilitiesDiscovery:
     @staticmethod
     def filter_cadastral_types(feature_types: List[str]) -> List[str]:
         """
-        Filter feature types to only include cadastral-related types.
+        Filter and sort feature types to prioritize cadastral parcels.
+        Sorts to specific priority keywords first, then others.
+        Excludes administrative boundaries explicitly.
         
         Args:
             feature_types: List of all feature types
             
         Returns:
-            Filtered list with only cadastral types
+            Filtered and sorted list
         """
-        cadastral_keywords = [
-            'catast', 'parcel', 'finca', 'predio', 
-            'cp:', 'cadastral', 'rustic', 'urban'
+        # Primary keywords (definitely parcels)
+        primary_keywords = ['parcel', 'finca', 'predio', 'cp:cadastralparcel']
+        
+        # Secondary keywords (related to cadastre but less specific)
+        secondary_keywords = ['catast', 'rustic', 'urban', 'cp:']
+        
+        # Excluded keywords (administrative units, text, lines)
+        excluded_keywords = [
+            'municipio', 'concejo', 'cascourbano', 'poligono', 
+            'txt', 'lin_', 'line', 'pt_', 'text', 'edif'
         ]
         
-        filtered = []
+        primary_matches = []
+        secondary_matches = []
+        
         for ft in feature_types:
             ft_lower = ft.lower()
-            if any(keyword in ft_lower for keyword in cadastral_keywords):
-                filtered.append(ft)
+            
+            # Skip excluded types
+            if any(keyword in ft_lower for keyword in excluded_keywords):
+                continue
+            
+            # Check primary match
+            if any(keyword in ft_lower for keyword in primary_keywords):
+                primary_matches.append(ft)
+                continue
+                
+            # Check secondary match
+            if any(keyword in ft_lower for keyword in secondary_keywords):
+                secondary_matches.append(ft)
+                
+        # Combine lists with primary first
+        result = primary_matches + secondary_matches
         
-        return filtered if filtered else feature_types  # Return all if no matches
+        # If filtering removed everything (e.g. strict exclusion), fallback to original list
+        # but try to filter excluded ones at least
+        if not result and feature_types:
+            return [ft for ft in feature_types if not any(k in ft.lower() for k in excluded_keywords)]
+            
+        return result
 
 
 class SpanishStateCatastroClient:
