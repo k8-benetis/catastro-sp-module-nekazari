@@ -868,7 +868,16 @@ def query_by_coordinates():
         "province": str,
         "address": str,
         "coordinates": {"lon": float, "lat": float},
-        "region": "spain" | "navarra" | "euskadi"
+        "region": "spain" | "navarra" | "euskadi",
+        "geometry": object (GeoJSON),
+        "candidates": [
+            {
+                "cadastralReference": str,
+                "municipality": str,
+                ...
+                "type": str (optional)
+            }
+        ]
     }
     
     Response (501):
