@@ -1801,6 +1801,10 @@ class NavarraCatastroClient:
             
             logger.info(f"Found {len(candidates)} candidates in Navarra. Primary: {result.get('cadastralReference')}, Type: {result.get('type')}")
             return result
+        
+        except Exception as e:
+            logger.error(f"Error in Navarra query_by_coordinates: {e}", exc_info=True)
+            return None
 
     def _process_navarra_feature(self, feature: Dict, feature_type: str, longitude: float, latitude: float) -> Optional[Dict]:
         """Process a WFS feature into a standardized candidate dictionary."""
