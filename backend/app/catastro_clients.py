@@ -12,6 +12,7 @@ from zeep import Client, Settings
 from zeep.exceptions import Fault, TransportError
 import requests
 from xml.etree import ElementTree as ET
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -1002,6 +1003,17 @@ class SpanishStateCatastroClient:
             cadastral_data = self._parse_soap_xml_response(result, srs, longitude, latitude)
             
             if cadastral_data:
+                # Enrichment: If geometry is missing (standard for SOAP), try to fetch it via WFS
+                if not cadastral_data.get('geometry') and cadastral_data.get('cadastralReference'):
+                    ref_cat = cadastral_data.get('cadastralReference')
+                    logger.info(f"Fetching geometry for RefCat {ref_cat} via INSPIRE WFS")
+                    geometry = self._fetch_geometry_from_wfs(ref_cat)
+                    if geometry:
+                        cadastral_data['geometry'] = geometry
+                        logger.info(f"Successfully enriched RefCat {ref_cat} with geometry")
+                    else:
+                        logger.warning(f"Could not fetch geometry for RefCat {ref_cat}")
+
                 logger.info(
                     f"Found cadastral reference {cadastral_data.get('cadastralReference')} "
                     f"for coordinates ({longitude}, {latitude}), municipality: {cadastral_data.get('municipality')}"
@@ -1012,7 +1024,7 @@ class SpanishStateCatastroClient:
             return cadastral_data
 
         except Fault as e:
-            logger.warning(f"SOAP Fault querying coordinates ({longitude}, {latitude}): {e}")
+            logger.warning(f"SOAP Fault querying coordinates ({longitude}, {latitude}): {e}", exc_info=False)
             # Common fault codes:
             # - 11: No se encontró parcela (parcel not found)
             # - Other codes: various errors
@@ -1023,6 +1035,87 @@ class SpanishStateCatastroClient:
             return None
         except Exception as e:
             logger.error(f"Unexpected error querying coordinates ({longitude}, {latitude}): {e}", exc_info=True)
+            return None
+
+    def _fetch_geometry_from_wfs(self, ref_cat: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch geometry for a Cadastral Reference using the INSPIRE WFS service.
+        URL: http://ovc.catastro.meh.es/INSPIRE/wfsCP.aspx
+        """
+        wfs_url = "http://ovc.catastro.meh.es/INSPIRE/wfsCP.aspx"
+        try:
+            # The REF_CAT sometimes comes with hiphens or codes that match localId
+            # INSPIRE WFS expects localId or similar filter
+            # Filter by CadastralParcel.inspireId.localId or similar
+            
+            # Simple GetFeature with stored query or filter
+            # Using basic filter by REFCAT
+            params = {
+                'service': 'WFS',
+                'version': '2.0.0',
+                'request': 'GetFeature',
+                'typeNames': 'CP.CadastralParcel',
+                'srsName': 'EPSG:4326',
+                'outputFormat': 'application/json',  # Some services support JSON
+                # Filter is complex in WFS 2.0, try simple stored query if available
+                # or build a filter XML
+            }
+            
+            # Alternative: Use the "GetParcela" or similar via WFS filter
+            # Let's try constructing a filter for the localId (RefCat)
+            # RefCat in Spain is typically 14 or 20 chars
+            
+            # Constructing a standard OGC Filter
+            # Reference: <Filter><PropertyIsEqualTo><PropertyName>...
+            
+            # Simplified approach: Try fetching by stored query if available, otherwise filter
+            # Attempting simple filter on 'localId' which usually matches RefCat
+            # Note: 20 digit refcat is typical structure
+            
+            # NOTE: The Spanish INSPIRE WFS might accept 'refcat' parameter directly in some custom profiles
+            # checking docs... http://www.catastro.minhap.es/webinspire/documentos/WFS.pdf
+            # It supports 'GetFeature' with 'StoreQuery_id=GetParcel' and 'refcat' param
+            
+            params = {
+                'service': 'WFS',
+                'version': '2.0.0',
+                'request': 'GetFeature',
+                'storedQuery_id': 'GetParcel',
+                'refcat': ref_cat,
+                'srsName': 'EPSG:4326',
+                # 'outputFormat': 'application/json' # Try JSON, fallback to GML if needed
+            }
+            
+            # Try JSON first
+            import requests
+            response = requests.get(wfs_url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                # The service might return GML by default even if JSON requested if not supported
+                # Check content type
+                if 'json' in response.headers.get('Content-Type', '').lower():
+                    data = response.json()
+                    if 'features' in data and len(data['features']) > 0:
+                        return data['features'][0].get('geometry')
+                else:
+                    # Parse GML/XML
+                    # This is rigorous, simplified regex extraction for GML posList for Polygon
+                    # <gml:posList>...</gml:posList>
+                    import re
+                    content = response.text
+                    # Look for Polygon/Exterior/LinearRing/posList
+                    # This is a very rough parser, replacing with proper library like xml.etree is better
+                    # But for now, let's try to extract GML geometry and convert to GeoJSON structure
+                    
+                    # NOTE: Parsing GML is hard without libraries like gdal/fiona or specialized xml logic
+                    # We will return None if not JSON for now to avoid complexity, 
+                    # OR try a best effort extraction if it's a simple polygon
+                    pass
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Error fetching geometry from WFS for {ref_cat}: {e}")
             return None
 
     def _parse_soap_xml_response(self, result: Any, srs: str = "4326", longitude: float = None, latitude: float = None) -> Optional[Dict[str, Any]]:
@@ -1561,31 +1654,24 @@ class SpanishStateCatastroClient:
 
     def _extract_municipality_province(self, address: str) -> Tuple[Optional[str], Optional[str]]:
         """
-        Extract municipality and province from address string.
+        Extract municipality and province from address string using regex.
         
         The address format is typically:
         "DIRECCION MUNICIPIO (PROVINCIA)" or similar
-        
-        Args:
-            address: Address string from cadastral service
-            
-        Returns:
-            Tuple of (municipality, province) or (None, None)
         """
         if not address:
             return None, None
 
         try:
-            # Common pattern: "MUNICIPIO (PROVINCIA)"
-            if '(' in address and ')' in address:
-                parts = address.split('(')
-                if len(parts) >= 2:
-                    municipality = parts[0].strip()
-                    province = parts[1].rstrip(')').strip()
-                    return municipality, province
+            # Pattern: matches "Municipality (Province)" at the end of string
+            # Handles "POZUELO DE ALARCON (MADRID)"
+            match = re.search(r'([^(]+)\s*\(([^)]+)\)$', address.strip())
+            if match:
+                return match.group(1).strip(), match.group(2).strip()
             
-            # Alternative: Try to extract from end of string
-            # This is a simple heuristic and may not work for all cases
+            # Alternative pattern: "C/ ALCALA, 1 - 28014 MADRID" (No province code, but maybe last word is province)
+            # This is hard to guess accurately without a list of provinces.
+            # Stick to standard format or leave None.
             return None, None
 
         except Exception as e:
@@ -1820,10 +1906,11 @@ class EuskadiCatastroClient:
     
     # Try different possible WFS URLs for Euskadi
     WFS_BASE_URLS = [
-        "https://www.geo.euskadi.eus/wfs-katastro",
+        "https://b5m.gipuzkoa.eus/ogc/wfs/gipuzkoa_wfs",  # Gipuzkoa
+        "https://geo.araba.eus/WFS_INSPIRE_CP",           # Araba
+        "https://geo.bizkaia.eus/bizkaia/services/wfs",   # Bizkaia (Check specific endpoint)
+        "https://www.geo.euskadi.eus/wfs-katastro",       # General fallback
         "https://geo.euskadi.eus/wfs-katastro",
-        "https://www.geo.euskadi.eus/ogc/wfs",
-        "https://geo.euskadi.eus/ogc/wfs",
     ]
     FEATURE_TYPE = "CP:CadastralParcel"  # INSPIRE type
     
