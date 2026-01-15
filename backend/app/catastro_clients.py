@@ -148,15 +148,13 @@ class WFSCapabilitiesDiscovery:
         Returns:
             Filtered and sorted list
         """
-        # Primary types for cadastral parcels (highest priority)
-        # Added 'urbana' and 'rustica' explicitly for Navarra
-        primary_keywords = ['parcel', 'finca', 'predio', 'cp:cadastralparcel', 'urbana', 'rustica']
+        # Primary keywords (definitely parcels)
+        primary_keywords = ['parcel', 'finca', 'predio', 'cp:cadastralparcel']
         
-        # Secondary types (other valid cadastral layers)
+        # Secondary keywords (related to cadastre but less specific)
         secondary_keywords = ['catast', 'rustic', 'urban', 'cp:']
         
-        # Excluded keywords (administrative boundaries, text, lines)
-        # Added 'poligono' to exclude "Poligono Catastral" which is a grouping, not a parcel
+        # Excluded keywords (administrative units, text, lines)
         excluded_keywords = [
             'municipio', 'concejo', 'cascourbano', 'poligono', 
             'txt', 'lin_', 'line', 'pt_', 'text', 'edif'
@@ -524,6 +522,7 @@ class SpanishStateCatastroClient:
                             try:
                                 val1 = float(coord_pairs[i])
                                 val2 = float(coord_pairs[i + 1])
+                                # INSPIRE often uses lat/lon order, but we need lon/lat for GeoJSON
                                 # If first value is > 90 or < -90, it's likely longitude
                                 # If first value is between -90 and 90, it's likely latitude
                                 if abs(val1) <= 90 and abs(val2) <= 180:
@@ -1000,38 +999,17 @@ class SpanishStateCatastroClient:
             # With raw_response=True, result is a lxml.etree.Element
             # Parse the SOAP response XML directly
             logger.info(f"Calling Consulta_RCCOOR for coordinates ({longitude}, {latitude}), SRS={srs_str}")
-            logger.info(f"Calling Consulta_RCCOOR for coordinates ({longitude}, {latitude}), SRS={srs_str}")
-
-            # New logic: Extract all candidates
-            candidates = self._parse_soap_response_candidates(result)
+            cadastral_data = self._parse_soap_xml_response(result, srs, longitude, latitude)
             
-            if not candidates:
-                 logger.warning(f"No cadastral data found for coordinates ({longitude}, {latitude})")
-                 return None
+            if cadastral_data:
+                logger.info(
+                    f"Found cadastral reference {cadastral_data.get('cadastralReference')} "
+                    f"for coordinates ({longitude}, {latitude}), municipality: {cadastral_data.get('municipality')}"
+                )
+            else:
+                logger.warning(f"No cadastral data found for coordinates ({longitude}, {latitude})")
             
-            # Enrich candidates with geometry (limit 5)
-            candidates = self._enrich_candidates_with_geometry(candidates, srs)
-            
-            # Primary candidate is the first one (usually the best match)
-            # OR we can do some logic to find the best one.
-            # For backward compatibility, populating top-level fields with the first one.
-            primary = candidates[0]
-            
-            # Retrieve geometry for the primary candidate only IF NOT already enriched
-            # (Fetching enriched geometry sets it in the dict)
-            if primary.get('cadastralReference') and not primary.get('geometry'):
-                 geometry = self.get_parcel_geometry(primary['cadastralReference'], srs)
-                 primary['geometry'] = geometry
-
-            # Construct final response
-            response = primary.copy()
-            response['candidates'] = candidates
-            
-            logger.info(
-                f"Found {len(candidates)} candidates. Primary: {response.get('cadastralReference')} "
-            )
-            
-            return response
+            return cadastral_data
 
         except Fault as e:
             logger.warning(f"SOAP Fault querying coordinates ({longitude}, {latitude}): {e}")
@@ -1180,6 +1158,9 @@ class SpanishStateCatastroClient:
             
             if ldt_elem is not None:
                 logger.info(f"Found ldt element: {etree.tostring(ldt_elem, encoding='unicode', pretty_print=True)[:1000]}")
+            else:
+                # Log the coord element structure to understand what we're getting
+                logger.warning(f"ldt element not found. Coord element structure: {etree.tostring(coord_elem, encoding='unicode', pretty_print=True)[:1500]}")
                 
                 # Extract address from ld/nv
                 ld_elem = ldt_elem.find('{http://www.catastro.meh.es/}ld')
@@ -1225,10 +1206,7 @@ class SpanishStateCatastroClient:
                 if prov_elem is not None and prov_elem.text is not None:
                     result_dict['province'] = prov_elem.text.strip()
                     logger.info(f"Extracted province from provincia: {result_dict['province']}")
-            else:
-                # Log the coord element structure to understand what we're getting
-                logger.warning(f"ldt element not found. Coord element structure: {etree.tostring(coord_elem, encoding='unicode', pretty_print=True)[:1500]}")
-                
+            
             # Also try to extract municipality and province from pc (parcel code) structure
             # pc1 is province code, pc2 is municipality code
             # We can use these codes to look up names, but for now we'll try to get names from XML
@@ -1329,78 +1307,6 @@ class SpanishStateCatastroClient:
         except Exception as e:
             logger.error(f"Error parsing SOAP XML response: {e}", exc_info=True)
             return None
-
-    def _parse_soap_response_candidates(self, result: Any) -> List[Dict[str, Any]]:
-        """Parse SOAP response to extract ALL candidates (multiple coord elements)."""
-        candidates = []
-        try:
-            # Navigate to coord list
-            coord_list = None
-            if hasattr(result, 'coordenadas') and hasattr(result.coordenadas, 'coord'):
-                coord_list = result.coordenadas.coord
-            elif hasattr(result, 'coord'):
-                coord_list = result.coord
-            else:
-                coord_list = result
-            
-            if coord_list is None:
-                return []
-            
-            # Ensure it's a list
-            if hasattr(coord_list, '__iter__') and not isinstance(coord_list, str):
-                coord_list = list(coord_list)
-            else:
-                coord_list = [coord_list]
-            
-            # Process each coord element
-            for coord in coord_list:
-                candidate = {}
-                if hasattr(coord, 'find') and hasattr(coord, 'iter'):
-                    # Extract cadastral reference
-                    pc_elem = coord.find('.//pc') or coord.find('pc')
-                    if pc_elem is not None:
-                        pc_parts = []
-                        for pc_num in ['pc1', 'pc2', 'pc3', 'pc4', 'pc5', 'pc6', 'pc7']:
-                            pc_val = pc_elem.find(pc_num)
-                            if pc_val is not None and pc_val.text:
-                                pc_text = pc_val.text.strip()
-                                if pc_text:
-                                    if pc_num == 'pc1':
-                                        pc_parts.append(pc_text.zfill(2))
-                                    elif pc_num == 'pc2':
-                                        pc_parts.append(pc_text.zfill(3))
-                                    elif pc_num in ['pc3', 'pc7']:
-                                        pc_parts.append(pc_text)
-                                    elif pc_num == 'pc4':
-                                        pc_parts.append(pc_text.zfill(3))
-                                    elif pc_num == 'pc5':
-                                        pc_parts.append(pc_text.zfill(5))
-                                    elif pc_num == 'pc6':
-                                        pc_parts.append(pc_text.zfill(4))
-                        if pc_parts:
-                            candidate['cadastralReference'] = '-'.join(pc_parts)
-                    
-                    # Extract address
-                    ldt_elem = coord.find('.//ldt') or coord.find('ldt')
-                    if ldt_elem is not None:
-                        all_text = "".join(ldt_elem.itertext()).strip()
-                        if all_text:
-                            candidate['address'] = all_text
-                
-                # Only add if we have cadastral reference
-                if candidate.get('cadastralReference'):
-                    if candidate.get('address'):
-                        muni, prov = self._extract_municipality_province(candidate['address'])
-                        candidate['municipality'] = muni
-                        candidate['province'] = prov
-                    candidate['region'] = 'spain'
-                    candidate['geometry'] = None
-                    candidates.append(candidate)
-            
-            return candidates
-        except Exception as e:
-            logger.error(f"Error parsing SOAP candidates: {e}", exc_info=True)
-            return []
 
     def _parse_soap_response(self, result: Any) -> Optional[Dict[str, Any]]:
         """
@@ -1523,32 +1429,14 @@ class SpanishStateCatastroClient:
                         logger.info(f"Extracted cadastral reference from XML pc: {result_dict['cadastralReference']}")
                 
                 # Extract address from ldt element
-                # Structure can be ldt -> ld -> nv OR just ldt plain text
                 ldt_elem = coord.find('.//ldt') or coord.find('ldt')
                 if ldt_elem is not None:
-                    # Try ld/nv structure
                     ld_elem = ldt_elem.find('.//ld') or ldt_elem.find('ld')
                     if ld_elem is not None:
                         nv_elem = ld_elem.find('nv')
                         if nv_elem is not None and nv_elem.text:
                             result_dict['address'] = nv_elem.text.strip()
                             logger.debug(f"Extracted address from XML ldt/ld/nv: {result_dict['address']}")
-                    
-                    # If not found yet, try direct text or other children
-                    if not result_dict.get('address') and ldt_elem.text:
-                         result_dict['address'] = ldt_elem.text.strip()
-                         logger.debug(f"Extracted address from XML ldt (direct): {result_dict['address']}")
-                    
-                    # Try finding ANY text in ldt if complex structure
-                    if not result_dict.get('address'):
-                        all_text = "".join(ldt_elem.itertext()).strip()
-                        if all_text:
-                            result_dict['address'] = all_text
-                            logger.debug(f"Extracted address from XML ldt (all text): {result_dict['address']}")
-                            
-                # Also look for 'dom' -> 'nm' (Munipio) and 'np' (Provincia) if available
-                # This helps populating municipality/province even if address parsing fails
-                # (Logic to be added if needed, but address parsing is primary)
                 
                 # Extract coordinates from geo element
                 geo_elem = coord.find('.//geo') or coord.find('geo')
@@ -1689,46 +1577,15 @@ class SpanishStateCatastroClient:
 
         try:
             # Common pattern: "MUNICIPIO (PROVINCIA)"
+            if '(' in address and ')' in address:
+                parts = address.split('(')
+                if len(parts) >= 2:
+                    municipality = parts[0].strip()
+                    province = parts[1].rstrip(')').strip()
+                    return municipality, province
+            
+            # Alternative: Try to extract from end of string
             # This is a simple heuristic and may not work for all cases
-            # More robust parsing would involve regex or a dedicated address parser
-            
-            # First, try to find a pattern like "ADDRESS, MUNICIPALITY (PROVINCE)"
-            # or "ADDRESS, MUNICIPALITY, PROVINCE"
-            
-            # Look for (PROVINCE) at the end
-            import re
-            match_paren = re.search(r'(.+),\s*([^,]+)\s*\(([^)]+)\)\s*$', address)
-            if match_paren:
-                # address_part = match_paren.group(1).strip() # Not needed for municipality/province
-                municipality = match_paren.group(2).strip()
-                province = match_paren.group(3).strip()
-                logger.debug(f"Extracted municipality '{municipality}' and province '{province}' from address using (PROVINCE) pattern.")
-                return municipality, province
-            
-            # Look for "MUNICIPALITY, PROVINCE" at the end
-            match_comma = re.search(r'(.+),\s*([^,]+),\s*([^,]+)\s*$', address)
-            if match_comma:
-                # address_part = match_comma.group(1).strip()
-                municipality = match_comma.group(2).strip()
-                province = match_comma.group(3).strip()
-                logger.debug(f"Extracted municipality '{municipality}' and province '{province}' from address using comma pattern.")
-                return municipality, province
-            
-            # If no clear pattern, try to split by last comma or space and assume last part is municipality
-            # This is less reliable
-            parts = [p.strip() for p in address.split(',')]
-            if len(parts) >= 2:
-                # Assume last part is municipality, second to last might be province
-                municipality = parts[-1]
-                province = parts[-2] if len(parts) >= 3 else None
-                logger.debug(f"Extracted municipality '{municipality}' and province '{province}' from address using general split.")
-                return municipality, province
-            elif len(parts) == 1:
-                # If only one part, it might be just the municipality or address
-                # Cannot reliably extract province
-                logger.debug(f"Could not reliably extract municipality/province from single part address: '{address}'")
-                return parts[0], None
-
             return None, None
 
         except Exception as e:
@@ -1817,9 +1674,7 @@ class NavarraCatastroClient:
             feature_types = self._get_feature_types()
 
             
-            # Try each feature type and collect candidates
-            candidates = []
-            
+            # Try each feature type until we find a parcel
             for feature_type in feature_types:
                 try:
                     params = {
@@ -1835,68 +1690,75 @@ class NavarraCatastroClient:
                     logger.info(f"Trying Navarra WFS with feature type: {feature_type}, bbox={bbox}")
                     response = self.session.get(self.WFS_BASE_URL, params=params, timeout=15)
                     
+                    logger.debug(f"Navarra WFS response status: {response.status_code}")
+                    
+                    # Log raw response for debugging
+                    if response.status_code == 200:
+                        try:
+                            response_text = response.text if hasattr(response, 'text') else response.content.decode('utf-8', errors='ignore')
+                            logger.info(f"Navarra WFS raw response (first 1000 chars):\n{response_text[:1000]}")
+                        except Exception as e:
+                            logger.warning(f"Could not log Navarra WFS raw response: {e}")
+                    
                     if response.status_code == 200:
                         try:
                             data = response.json()
                             if 'features' in data and len(data['features']) > 0:
-                                count = len(data['features'])
-                                logger.info(f"Found {count} features in Navarra WFS with type {feature_type}")
-                                
-                                for feature in data['features']:
-                                    # Process feature into candidate
-                                    candidate = self._process_navarra_feature(feature, feature_type, longitude, latitude)
-                                    if candidate:
-                                        candidates.append(candidate)
-                                        
-                        except ValueError:
-                            pass
+                                logger.info(f"Found {len(data['features'])} features in Navarra WFS with type {feature_type}")
+                                # Found features, break and process
+                                break
+                            else:
+                                logger.debug(f"No features in Navarra WFS response for type {feature_type}")
+                        except ValueError as e:
+                            # Not JSON, might be XML or error
+                            logger.warning(f"Navarra WFS response is not JSON: {e}")
+                            logger.debug(f"Response content (first 500 chars): {response.text[:500] if hasattr(response, 'text') else response.content[:500]}")
                     else:
                         logger.debug(f"Navarra WFS returned status {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    logger.debug(f"Request error with Navarra WFS, type {feature_type}: {e}")
+                    continue
                 except Exception as e:
                     logger.debug(f"Feature type {feature_type} failed: {e}")
                     continue
-
-            if not candidates:
+            else:
                 # No features found with any type
                 logger.debug("No features found in Navarra WFS response with any feature type")
                 return None
             
-            # Sort candidates by priority (Parcel types first)
-            # Already sorted partly by the order of feature_types loop
-            
-            # Primary candidate is the first one
-            primary = candidates[0]
-            
-            # Construct result
-            result = primary.copy()
-            result['candidates'] = candidates
-            
-            logger.info(f"Found {len(candidates)} candidates in Navarra. Primary: {result.get('cadastralReference')}, Type: {result.get('type')}")
-            return result
-        
-        except Exception as e:
-            logger.error(f"Error in Navarra query_by_coordinates: {e}", exc_info=True)
-            return None
-
-    def _process_navarra_feature(self, feature: Dict, feature_type: str, longitude: float, latitude: float) -> Optional[Dict]:
-        """Process a WFS feature into a standardized candidate dictionary."""
-        try:
+            # Process the first feature found
+            feature = data['features'][0]
             properties = feature.get('properties', {})
             geometry = feature.get('geometry')
             
-            # Extract cadastral reference
+            # Log feature structure for debugging (ALWAYS log, even if geometry is None)
+            logger.info(f"Navarra WFS feature keys: {list(feature.keys())}")
+            logger.info(f"Navarra WFS properties keys: {list(properties.keys())}")
+            logger.info(f"Navarra WFS geometry present: {geometry is not None}, type: {type(geometry)}")
+            if geometry:
+                logger.info(f"Navarra WFS geometry keys: {list(geometry.keys()) if isinstance(geometry, dict) else 'N/A'}")
+                logger.info(f"Navarra WFS geometry type: {geometry.get('type') if isinstance(geometry, dict) else 'N/A'}")
+            else:
+                logger.warning(f"Navarra WFS: geometry is None or missing in feature. Feature structure: {json.dumps({k: str(type(v)) for k, v in feature.items()}, indent=2)[:500]}")
+            
+            # Extract cadastral reference from properties
+            # IDENA uses different property names, try common ones
             cadastral_ref = (
                 properties.get('localId') or
                 properties.get('inspireId') or
                 properties.get('cadastralReference') or
                 properties.get('id') or
-                properties.get('REFCAT') or
-                str(feature.get('id', '')).replace('ES.RRTN.CP.', '')
+                properties.get('REFCAT') or  # IDENA specific
+                feature.get('id', '').replace('ES.RRTN.CP.', '')
             )
             
             if not cadastral_ref:
+                logger.warning("Could not extract cadastral reference from Navarra WFS response")
+                logger.warning(f"Available properties: {list(properties.keys())}")
+                logger.warning(f"Feature ID: {feature.get('id', 'N/A')}")
                 return None
-                
+            
+            # Try to extract municipality from various possible property names
             municipality = (
                 properties.get('municipality') or
                 properties.get('municipio') or
@@ -1909,6 +1771,7 @@ class NavarraCatastroClient:
                 None
             )
             
+            # Try to extract address
             address = (
                 properties.get('address') or
                 properties.get('direccion') or
@@ -1917,24 +1780,29 @@ class NavarraCatastroClient:
                 None
             )
             
-            # Validate geometry
-            valid_geometry = None
-            if geometry and isinstance(geometry, dict) and geometry.get('type') in ('Polygon', 'MultiPolygon'):
-                valid_geometry = geometry
+            # Validate geometry if present
+            if geometry:
+                # Ensure geometry is valid GeoJSON
+                if isinstance(geometry, dict) and geometry.get('type') in ('Polygon', 'MultiPolygon'):
+                    logger.info(f"Navarra parcel {cadastral_ref} has valid GeoJSON geometry: {geometry.get('type')}")
+                else:
+                    logger.warning(f"Navarra parcel {cadastral_ref} has geometry but invalid format: {type(geometry)}")
+                    geometry = None  # Set to None if invalid
+            else:
+                logger.warning(f"Navarra parcel {cadastral_ref} found but geometry is None or missing")
             
-            return {
+            result = {
                 'cadastralReference': str(cadastral_ref),
                 'municipality': municipality,
                 'province': 'Navarra',
                 'address': address,
                 'coordinates': {'lon': longitude, 'lat': latitude},
-                'geometry': valid_geometry,
-                'region': 'navarra',
-                'type': feature_type # Include source type for UI
+                'geometry': geometry,  # GeoJSON geometry (may be None)
+                'region': 'navarra'
             }
-        except Exception as e:
-            logger.error(f"Error processing Navarra feature: {e}")
-            return None
+            
+            logger.info(f"Found Navarra parcel: {cadastral_ref}, municipality: {municipality}, geometry: {'present' if geometry else 'missing'}")
+            return result
                 
         except requests.exceptions.RequestException as e:
             logger.error(f"Error querying Navarra WFS: {e}")
@@ -1951,12 +1819,11 @@ class EuskadiCatastroClient:
     """
     
     # Try different possible WFS URLs for Euskadi
-    BASE_WFS_URLS = [
-        "https://b5m.gipuzkoa.eus/ogc/wfs/gipuzkoa_wfs",  # Gipuzkoa
-        "https://geo.araba.eus/WFS_Katastroa",          # Araba
-        "https://geo.araba.eus/WFS_INSPIRE_CP",         # Araba Inspire
-        # Bizkaia is complex, often requires specific portal. 
-        # Adding generic ones found in documentation just in case
+    WFS_BASE_URLS = [
+        "https://www.geo.euskadi.eus/wfs-katastro",
+        "https://geo.euskadi.eus/wfs-katastro",
+        "https://www.geo.euskadi.eus/ogc/wfs",
+        "https://geo.euskadi.eus/ogc/wfs",
     ]
     FEATURE_TYPE = "CP:CadastralParcel"  # INSPIRE type
     
@@ -2028,9 +1895,8 @@ class EuskadiCatastroClient:
             bbox = f"{longitude - buffer},{latitude - buffer},{longitude + buffer},{latitude + buffer},{srs_name}"
             
             # Try each WFS URL and feature type combination
-            candidates = []
-            
-            for wfs_url in self.BASE_WFS_URLS:
+            data = None
+            for wfs_url in self.WFS_BASE_URLS:
                 # Get feature types for this URL (dynamically discovered or fallback)
                 feature_types = self._get_feature_types_for_url(wfs_url)
                 
@@ -2049,101 +1915,106 @@ class EuskadiCatastroClient:
                         logger.info(f"Trying Euskadi WFS: URL={wfs_url}, feature_type={feature_type}, bbox={bbox}")
                         response = self.session.get(wfs_url, params=params, timeout=15)
                         
+                        # Log response status for debugging
+                        logger.debug(f"Euskadi WFS response status: {response.status_code}")
+                        
                         if response.status_code == 200:
                             try:
                                 data = response.json()
                                 if 'features' in data and len(data['features']) > 0:
                                     logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}, type={feature_type}")
-                                    
-                                    for feature in data['features']:
-                                         candidate = self._process_euskadi_feature(feature, feature_type, longitude, latitude)
-                                         if candidate:
-                                             candidates.append(candidate)
-                                    
+                                    break
+                                else:
+                                    logger.debug(f"No features in response from {wfs_url} with type {feature_type}")
                             except ValueError as e:
-                                logger.debug(f"Euskadi WFS response is not JSON: {e}")
+                                # Not JSON, might be XML or error
+                                logger.warning(f"Euskadi WFS response is not JSON from {wfs_url}: {e}")
+                                logger.debug(f"Response content (first 500 chars): {response.text[:500] if hasattr(response, 'text') else response.content[:500]}")
                         else:
-                            logger.debug(f"Euskadi WFS returned status {response.status_code}")
+                            logger.debug(f"Euskadi WFS returned status {response.status_code} from {wfs_url}")
+                    except requests.exceptions.RequestException as e:
+                        logger.debug(f"Request error with {wfs_url}, type {feature_type}: {e}")
+                        continue
                     except Exception as e:
                         logger.debug(f"Error with {wfs_url}, type {feature_type}: {e}")
                         continue
                 
-                # If we found candidates in this URL, maybe we don't need to try others?
-                # But sometimes different URLs handle different provinces (Bizkaia, Gipuzkoa, Araba)
-                # Ideally we collect all.
-                
-            if not candidates:
+                if data and 'features' in data and len(data['features']) > 0:
+                    break
+            
+            if not data or 'features' not in data or len(data['features']) == 0:
                 logger.warning(f"No features found in Euskadi WFS for coordinates ({longitude}, {latitude}) after trying all URLs and feature types")
                 return None
             
-            # Primary candidate is the first one
-            primary = candidates[0]
-            
-            result = primary.copy()
-            result['candidates'] = candidates
-            
-            logger.info(f"Found {len(candidates)} candidates in Euskadi. Primary: {result.get('cadastralReference')}")
-            return result
-        
-        except Exception as e:
-            logger.error(f"Error in Euskadi query_by_coordinates: {e}", exc_info=True)
-            return None
-    
-    def _process_euskadi_feature(self, feature: Dict, feature_type: str, longitude: float, latitude: float) -> Optional[Dict]:
-        """Process an Euskadi WFS feature into a standardized candidate dictionary."""
-        try:
-            properties = feature.get('properties', {})
-            geometry = feature.get('geometry')
-            
-            # Extract cadastral reference
-            cadastral_ref = (
-                properties.get('localId') or
-                properties.get('inspireId') or
-                properties.get('cadastralReference') or
-                properties.get('id') or
-                feature.get('id', '')
-            )
-            
-            if not cadastral_ref:
+            # Parse GeoJSON response
+            if 'features' in data and len(data['features']) > 0:
+                feature = data['features'][0]
+                properties = feature.get('properties', {})
+                geometry = feature.get('geometry')
+                
+                # Extract cadastral reference
+                cadastral_ref = (
+                    properties.get('localId') or
+                    properties.get('inspireId') or
+                    properties.get('cadastralReference') or
+                    properties.get('id') or
+                    feature.get('id', '')
+                )
+                
+                if not cadastral_ref:
+                    logger.warning("Could not extract cadastral reference from Euskadi WFS response")
+                    return None
+                
+                # Try to extract municipality from various possible property names
+                municipality = (
+                    properties.get('municipality') or
+                    properties.get('municipio') or
+                    properties.get('municipalityName') or
+                    properties.get('nombreMunicipio') or
+                    properties.get('MUNICIPIO') or
+                    properties.get('NOMBRE_MUNICIPIO') or
+                    None
+                )
+                
+                # Try to extract province
+                province = (
+                    properties.get('province') or
+                    properties.get('provincia') or
+                    properties.get('provinceName') or
+                    properties.get('PROVINCIA') or
+                    'País Vasco'  # Default fallback
+                )
+                
+                # Try to extract address
+                address = (
+                    properties.get('address') or
+                    properties.get('direccion') or
+                    properties.get('addressText') or
+                    properties.get('DIRECCION') or
+                    None
+                )
+                
+                result = {
+                    'cadastralReference': str(cadastral_ref),
+                    'municipality': municipality,
+                    'province': province,
+                    'address': address,
+                    'coordinates': {'lon': longitude, 'lat': latitude},
+                    'geometry': geometry,  # GeoJSON geometry
+                    'region': 'euskadi'
+                }
+                
+                logger.debug(f"Euskadi parcel properties: {list(properties.keys())}")
+                
+                logger.info(f"Found Euskadi parcel: {cadastral_ref}")
+                return result
+            else:
+                logger.debug("No features found in Euskadi WFS response")
                 return None
-            
-            municipality = (
-                properties.get('municipality') or
-                properties.get('municipio') or
-                properties.get('municipalityName') or
-                properties.get('nombreMunicipio') or
-                properties.get('MUNICIPIO') or
-                properties.get('NOMBRE_MUNICIPIO') or
-                None
-            )
-            
-            province = (
-                properties.get('province') or
-                properties.get('provincia') or
-                properties.get('provinceName') or
-                properties.get('PROVINCIA') or
-                'País Vasco'
-            )
-            
-            address = (
-                properties.get('address') or
-                properties.get('direccion') or
-                properties.get('addressText') or
-                properties.get('DIRECCION') or
-                None
-            )
-            
-            return {
-                'cadastralReference': str(cadastral_ref),
-                'municipality': municipality,
-                'province': province,
-                'address': address,
-                'coordinates': {'lon': longitude, 'lat': latitude},
-                'geometry': geometry,
-                'region': 'euskadi',
-                'type': feature_type
-            }
-        except Exception as e:
-            logger.error(f"Error processing Euskadi feature: {e}")
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error querying Euskadi WFS: {e}")
             return None
-
+        except Exception as e:
+            logger.error(f"Unexpected error querying Euskadi cadastre: {e}", exc_info=True)
+            return None
