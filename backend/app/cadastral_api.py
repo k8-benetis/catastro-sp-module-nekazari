@@ -77,6 +77,15 @@ except ImportError:
     NavarraCatastroClient = None
     EuskadiCatastroClient = None
 
+# Import cache service for Redis caching
+try:
+    from cache_service import get_cache
+    _cache = get_cache()
+    logger.info(f"Cache service initialized: available={_cache.is_available}")
+except ImportError:
+    logger.warning("Cache service not available, caching disabled")
+    _cache = None
+
 @app.route('/notify', methods=['POST'])
 def orion_notification():
     """
@@ -897,6 +906,14 @@ def query_by_coordinates():
                 'message': 'Coordinates must be within Spain bounds'
             }), 400
         
+        # Check cache first (if available)
+        if _cache and _cache.is_available:
+            cached_data = _cache.get_by_coordinates(latitude, longitude)
+            if cached_data:
+                logger.info(f"Cache HIT for ({longitude}, {latitude})")
+                return jsonify(cached_data), 200
+            logger.debug(f"Cache MISS for ({longitude}, {latitude})")
+        
         # Determine region
         region = get_region(latitude, longitude)
         logger.info(f"Query coordinates ({longitude}, {latitude}) -> region: {region}")
@@ -923,6 +940,11 @@ def query_by_coordinates():
                 cadastral_data.setdefault('coordinates', {'lon': longitude, 'lat': latitude})
                 cadastral_data.setdefault('geometry', None)  # Explicitly set to None if missing
                 cadastral_data['region'] = region
+                
+                # Cache successful response
+                if _cache and _cache.is_available:
+                    _cache.set_by_coordinates(latitude, longitude, cadastral_data)
+                
                 return jsonify(cadastral_data), 200
             else:
                 # Return consistent structure even when not found (for graceful frontend degradation)
@@ -960,6 +982,11 @@ def query_by_coordinates():
                 cadastral_data.setdefault('coordinates', {'lon': longitude, 'lat': latitude})
                 cadastral_data.setdefault('geometry', None)  # Explicitly set to None if missing
                 cadastral_data['region'] = region
+                
+                # Cache successful response
+                if _cache and _cache.is_available:
+                    _cache.set_by_coordinates(latitude, longitude, cadastral_data)
+                
                 return jsonify(cadastral_data), 200
             else:
                 # Return consistent structure even when not found (for graceful frontend degradation)
@@ -997,6 +1024,11 @@ def query_by_coordinates():
                 cadastral_data.setdefault('coordinates', {'lon': longitude, 'lat': latitude})
                 cadastral_data.setdefault('geometry', None)  # Explicitly set to None if missing
                 cadastral_data['region'] = region
+                
+                # Cache successful response
+                if _cache and _cache.is_available:
+                    _cache.set_by_coordinates(latitude, longitude, cadastral_data)
+                
                 return jsonify(cadastral_data), 200
             else:
                 # Return consistent structure even when not found (for graceful frontend degradation)

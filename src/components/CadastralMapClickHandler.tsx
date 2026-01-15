@@ -3,9 +3,53 @@ import { useLocation } from 'react-router-dom';
 import { useViewerOptional } from '@nekazari/sdk';
 import { cadastralApi, CadastralData } from '../services/cadastralApi';
 import { parcelApi } from '../services/parcelApi';
-import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { CheckCircle, XCircle, Loader2, Clock } from 'lucide-react';
 import { useCadastral } from '../context/CadastralContext';
 import { CadastralConfirmDialog } from './CadastralConfirmDialog';
+
+// Error types for specific UX messages
+type ErrorType = 'not_found' | 'timeout' | 'network' | 'service_unavailable' | 'generic';
+
+const getErrorMessage = (error: any): { message: string; type: ErrorType } => {
+  // Check for timeout
+  if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+    return {
+      message: 'El servicio catastral está tardando más de lo habitual. Por favor, inténtelo de nuevo.',
+      type: 'timeout'
+    };
+  }
+
+  // Check for network error
+  if (error.code === 'ERR_NETWORK' || !navigator.onLine) {
+    return {
+      message: 'Sin conexión a internet. Por favor, verifique su conexión.',
+      type: 'network'
+    };
+  }
+
+  // Check for 404 - not found
+  if (error.response?.status === 404) {
+    return {
+      message: 'No se encontró información catastral para esta ubicación.',
+      type: 'not_found'
+    };
+  }
+
+  // Check for service unavailable
+  if (error.response?.status === 503 || error.response?.status === 502) {
+    return {
+      message: 'El servicio catastral no está disponible temporalmente. Inténtelo más tarde.',
+      type: 'service_unavailable'
+    };
+  }
+
+  // Generic error with server message if available
+  const serverMessage = error.response?.data?.error || error.response?.data?.message;
+  return {
+    message: serverMessage || error.message || 'Error al procesar la parcela',
+    type: 'generic'
+  };
+};
 
 /**
  * Component that intercepts map clicks on the /entities page
@@ -17,8 +61,9 @@ export const CadastralMapClickHandler: React.FC = () => {
   const cesiumViewer = viewerContext?.cesiumViewer;
   const { isClickEnabled } = useCadastral();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [notification, setNotification] = useState<{
-    type: 'success' | 'error';
+    type: 'success' | 'error' | 'warning';
     message: string;
   } | null>(null);
   const [pendingParcel, setPendingParcel] = useState<{
@@ -27,6 +72,7 @@ export const CadastralMapClickHandler: React.FC = () => {
   } | null>(null);
   const handlerRef = useRef<any>(null);
   const notificationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Only activate on /entities page
   const isEntitiesPage = location.pathname === '/entities';
@@ -120,10 +166,22 @@ export const CadastralMapClickHandler: React.FC = () => {
   const handleMapClick = async (longitude: number, latitude: number) => {
     setIsProcessing(true);
     setNotification(null);
+    setElapsedSeconds(0);
+
+    // Start elapsed time counter
+    timerRef.current = setInterval(() => {
+      setElapsedSeconds(prev => prev + 1);
+    }, 1000);
 
     try {
       console.log('[CadastralMapClickHandler] Querying cadastral service...');
       const cadastralData = await cadastralApi.queryByCoordinates(longitude, latitude);
+
+      // Clear timer on success
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
 
       if (!cadastralData.cadastralReference) {
         setNotification({
@@ -142,7 +200,7 @@ export const CadastralMapClickHandler: React.FC = () => {
 
       if (!hasGeometry) {
         setNotification({
-          type: 'error',
+          type: 'warning',
           message: 'La parcela no tiene geometría disponible. Por favor, use el método de dibujo manual.',
         });
         clearNotificationAfterDelay();
@@ -158,24 +216,36 @@ export const CadastralMapClickHandler: React.FC = () => {
 
     } catch (error: any) {
       console.error('[CadastralMapClickHandler] Error:', error);
-      const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message || 'Error al procesar la parcela';
+
+      // Clear timer on error
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      const { message, type } = getErrorMessage(error);
       setNotification({
-        type: 'error',
-        message: errorMessage,
+        type: type === 'not_found' ? 'warning' : 'error',
+        message,
       });
-      clearNotificationAfterDelay();
+      clearNotificationAfterDelay(type === 'timeout' ? 8000 : 5000);
     } finally {
       setIsProcessing(false);
+      setElapsedSeconds(0);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     }
   };
 
-  const clearNotificationAfterDelay = () => {
+  const clearNotificationAfterDelay = (delay: number = 5000) => {
     if (notificationTimeoutRef.current) {
       clearTimeout(notificationTimeoutRef.current);
     }
     notificationTimeoutRef.current = setTimeout(() => {
       setNotification(null);
-    }, 5000);
+    }, delay);
   };
 
   // Calculate polygon area in hectares using equirectangular projection
@@ -201,7 +271,7 @@ export const CadastralMapClickHandler: React.FC = () => {
     const lat0Rad = (lat0 * Math.PI) / 180;
 
     const EARTH_RADIUS_METERS = 6378137;
-    
+
     // Project coordinates to meters using equirectangular projection
     const projected = coords.map(([lon, lat]) => {
       const x = ((lon * Math.PI) / 180) * EARTH_RADIUS_METERS * Math.cos(lat0Rad);
@@ -280,11 +350,20 @@ export const CadastralMapClickHandler: React.FC = () => {
 
   return (
     <>
-      {/* Processing indicator */}
+      {/* Processing indicator with elapsed time */}
       {isProcessing && !pendingParcel && (
         <div className="fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border border-gray-200 p-4 flex items-center gap-3 min-w-[300px]">
           <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
-          <span className="text-sm text-gray-700">Consultando catastro...</span>
+          <div className="flex flex-col">
+            <span className="text-sm text-gray-700">Consultando catastro...</span>
+            {elapsedSeconds > 0 && (
+              <span className="text-xs text-gray-500 flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {elapsedSeconds}s
+                {elapsedSeconds >= 5 && ' - El servicio está tardando más de lo habitual'}
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -301,17 +380,25 @@ export const CadastralMapClickHandler: React.FC = () => {
 
       {/* Notification */}
       {notification && (
-        <div className={`fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border ${
-          notification.type === 'success' ? 'border-green-200' : 'border-red-200'
-        } p-4 flex items-center gap-3 min-w-[300px]`}>
+        <div className={`fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg border ${notification.type === 'success'
+            ? 'border-green-200'
+            : notification.type === 'warning'
+              ? 'border-yellow-200'
+              : 'border-red-200'
+          } p-4 flex items-center gap-3 min-w-[300px] max-w-[400px]`}>
           {notification.type === 'success' ? (
-            <CheckCircle className="w-5 h-5 text-green-600" />
+            <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
+          ) : notification.type === 'warning' ? (
+            <XCircle className="w-5 h-5 text-yellow-600 flex-shrink-0" />
           ) : (
-            <XCircle className="w-5 h-5 text-red-600" />
+            <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
           )}
-          <span className={`text-sm ${
-            notification.type === 'success' ? 'text-green-700' : 'text-red-700'
-          }`}>
+          <span className={`text-sm ${notification.type === 'success'
+              ? 'text-green-700'
+              : notification.type === 'warning'
+                ? 'text-yellow-700'
+                : 'text-red-700'
+            }`}>
             {notification.message}
           </span>
         </div>

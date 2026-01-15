@@ -6,6 +6,7 @@
 
 import logging
 import json
+import hashlib
 from typing import Dict, Any, Optional, Tuple, List
 from zeep import Client, Settings
 from zeep.exceptions import Fault, TransportError
@@ -13,6 +14,150 @@ import requests
 from xml.etree import ElementTree as ET
 
 logger = logging.getLogger(__name__)
+
+# Try to import cache service for capabilities caching
+try:
+    from cache_service import get_cache
+    _cache = get_cache()
+except ImportError:
+    logger.warning("Cache service not available for capabilities discovery")
+    _cache = None
+
+
+class WFSCapabilitiesDiscovery:
+    """
+    Utility class for discovering WFS capabilities and available feature types.
+    Uses Redis caching to avoid repeated GetCapabilities requests (TTL 7 days).
+    """
+    
+    # Cache TTL for capabilities (7 days in seconds)
+    CAPABILITIES_TTL = 604800
+    
+    @staticmethod
+    def discover_feature_types(
+        wfs_url: str,
+        fallback_types: List[str] = None,
+        timeout: int = 10
+    ) -> List[str]:
+        """
+        Discover available feature types from a WFS service using GetCapabilities.
+        
+        Args:
+            wfs_url: Base URL of the WFS service
+            fallback_types: List of feature types to return if discovery fails
+            timeout: Request timeout in seconds
+            
+        Returns:
+            List of feature type names (e.g., ['CATAST_Pol_ParcelaUrba', 'CATAST_Pol_ParcelaRusti'])
+        """
+        fallback_types = fallback_types or []
+        
+        # Check cache first
+        if _cache and _cache.is_available:
+            cached = _cache.get_capabilities(wfs_url)
+            if cached:
+                logger.debug(f"Using cached capabilities for {wfs_url}: {len(cached)} feature types")
+                return cached
+        
+        try:
+            # Make GetCapabilities request
+            params = {
+                'service': 'WFS',
+                'version': '2.0.0',
+                'request': 'GetCapabilities'
+            }
+            
+            logger.info(f"Discovering capabilities for WFS: {wfs_url}")
+            response = requests.get(wfs_url, params=params, timeout=timeout)
+            
+            if response.status_code != 200:
+                logger.warning(f"GetCapabilities failed for {wfs_url}: status {response.status_code}")
+                return fallback_types
+            
+            # Parse XML response
+            root = ET.fromstring(response.content)
+            
+            # WFS 2.0 namespaces
+            namespaces = {
+                'wfs': 'http://www.opengis.net/wfs/2.0',
+                'ows': 'http://www.opengis.net/ows/1.1',
+            }
+            
+            # Try to find FeatureTypeList
+            feature_types = []
+            
+            # Try WFS 2.0 structure first
+            feature_type_list = root.find('.//wfs:FeatureTypeList', namespaces)
+            if feature_type_list is not None:
+                for ft in feature_type_list.findall('.//wfs:FeatureType', namespaces):
+                    name = ft.find('wfs:Name', namespaces)
+                    if name is not None and name.text:
+                        feature_types.append(name.text.strip())
+            
+            # Try without namespaces if nothing found
+            if not feature_types:
+                feature_type_list = root.find('.//FeatureTypeList')
+                if feature_type_list is not None:
+                    for ft in feature_type_list.findall('.//FeatureType'):
+                        name = ft.find('Name')
+                        if name is not None and name.text:
+                            feature_types.append(name.text.strip())
+            
+            # Try OWS namespace (some WFS servers use this)
+            if not feature_types:
+                for ft in root.findall('.//{http://www.opengis.net/wfs/2.0}FeatureType'):
+                    name = ft.find('{http://www.opengis.net/wfs/2.0}Name')
+                    if name is not None and name.text:
+                        feature_types.append(name.text.strip())
+            
+            if feature_types:
+                logger.info(f"Discovered {len(feature_types)} feature types from {wfs_url}")
+                
+                # Cache the discovered types
+                if _cache and _cache.is_available:
+                    _cache.set_capabilities(wfs_url, feature_types)
+                
+                return feature_types
+            else:
+                logger.warning(f"No feature types found in GetCapabilities for {wfs_url}")
+                return fallback_types
+                
+        except requests.exceptions.Timeout:
+            logger.warning(f"GetCapabilities timeout for {wfs_url}")
+            return fallback_types
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"GetCapabilities request failed for {wfs_url}: {e}")
+            return fallback_types
+        except ET.ParseError as e:
+            logger.warning(f"GetCapabilities XML parse error for {wfs_url}: {e}")
+            return fallback_types
+        except Exception as e:
+            logger.error(f"Unexpected error in GetCapabilities for {wfs_url}: {e}", exc_info=True)
+            return fallback_types
+    
+    @staticmethod
+    def filter_cadastral_types(feature_types: List[str]) -> List[str]:
+        """
+        Filter feature types to only include cadastral-related types.
+        
+        Args:
+            feature_types: List of all feature types
+            
+        Returns:
+            Filtered list with only cadastral types
+        """
+        cadastral_keywords = [
+            'catast', 'parcel', 'finca', 'predio', 
+            'cp:', 'cadastral', 'rustic', 'urban'
+        ]
+        
+        filtered = []
+        for ft in feature_types:
+            ft_lower = ft.lower()
+            if any(keyword in ft_lower for keyword in cadastral_keywords):
+                filtered.append(ft)
+        
+        return filtered if filtered else feature_types  # Return all if no matches
 
 
 class SpanishStateCatastroClient:
@@ -1422,16 +1567,51 @@ class SpanishStateCatastroClient:
 class NavarraCatastroClient:
     """
     Client for Navarra Cadastre (WFS - IDENA).
-    Uses WFS 2.0.0 GetFeature requests.
+    Uses WFS 2.0.0 GetFeature requests with dynamic feature type discovery.
     """
     
     WFS_BASE_URL = "https://idena.navarra.es/ogc/wfs"  # Updated to correct IDENA WFS URL
     FEATURE_TYPE = "CP:CadastralParcel"  # INSPIRE fallback
     
+    # Hardcoded fallback feature types (used if GetCapabilities fails)
+    FALLBACK_FEATURE_TYPES = [
+        'CATAST_Pol_ParcelaUrba',  # Urban parcels
+        'CATAST_Pol_ParcelaRusti',  # Rural parcels
+        'CATAST_Pol_ParcelaMixta',  # Mixed parcels
+        'CP:CadastralParcel'  # INSPIRE fallback
+    ]
+    
     def __init__(self):
         """Initialize the WFS client."""
         self.session = requests.Session()
+        self._discovered_types = None
         logger.info("Navarra Catastro WFS client initialized")
+    
+    def _get_feature_types(self) -> List[str]:
+        """
+        Get feature types to try, using discovery if available.
+        Returns discovered types (cached) or fallback hardcoded types.
+        """
+        if self._discovered_types is not None:
+            return self._discovered_types
+        
+        # Try to discover feature types dynamically
+        discovered = WFSCapabilitiesDiscovery.discover_feature_types(
+            self.WFS_BASE_URL,
+            fallback_types=self.FALLBACK_FEATURE_TYPES
+        )
+        
+        # Filter to cadastral types
+        cadastral_types = WFSCapabilitiesDiscovery.filter_cadastral_types(discovered)
+        
+        if cadastral_types and cadastral_types != self.FALLBACK_FEATURE_TYPES:
+            logger.info(f"Using discovered Navarra feature types: {cadastral_types}")
+            self._discovered_types = cadastral_types
+        else:
+            logger.info("Using fallback Navarra feature types")
+            self._discovered_types = self.FALLBACK_FEATURE_TYPES
+        
+        return self._discovered_types
     
     def query_by_coordinates(
         self,
@@ -1460,13 +1640,9 @@ class NavarraCatastroClient:
             buffer = 0.0005  # ~50 meters in degrees
             bbox = f"{longitude - buffer},{latitude - buffer},{longitude + buffer},{latitude + buffer},{srs_name}"
             
-            # Try multiple feature types for Navarra (urban, rural, mixed parcels)
-            feature_types = [
-                'CATAST_Pol_ParcelaUrba',  # Urban parcels
-                'CATAST_Pol_ParcelaRusti',  # Rural parcels
-                'CATAST_Pol_ParcelaMixta',  # Mixed parcels
-                self.FEATURE_TYPE  # Fallback to INSPIRE type
-            ]
+            # Get feature types (dynamically discovered or fallback)
+            feature_types = self._get_feature_types()
+
             
             # Try each feature type until we find a parcel
             for feature_type in feature_types:
@@ -1609,7 +1785,7 @@ class NavarraCatastroClient:
 class EuskadiCatastroClient:
     """
     Client for Euskadi Cadastre (WFS - GeoEuskadi).
-    Uses WFS 2.0.0 GetFeature requests.
+    Uses WFS 2.0.0 GetFeature requests with dynamic feature type discovery.
     """
     
     # Try different possible WFS URLs for Euskadi
@@ -1621,18 +1797,47 @@ class EuskadiCatastroClient:
     ]
     FEATURE_TYPE = "CP:CadastralParcel"  # INSPIRE type
     
-    # Alternative feature types to try for Euskadi
-    ALTERNATIVE_FEATURE_TYPES = [
+    # Hardcoded fallback feature types (used if GetCapabilities fails)
+    FALLBACK_FEATURE_TYPES = [
+        "CP:CadastralParcel",
         "katastro:parcela",
         "parcela_catastral",
-        "CP.CadastralParcel",  # Alternative INSPIRE format
-        "CadastralParcel",  # Without namespace
+        "CP.CadastralParcel",
+        "CadastralParcel",
     ]
     
     def __init__(self):
         """Initialize the WFS client."""
         self.session = requests.Session()
+        self._discovered_types = {}  # Per-URL cache
         logger.info("Euskadi Catastro WFS client initialized")
+    
+    def _get_feature_types_for_url(self, wfs_url: str) -> List[str]:
+        """
+        Get feature types to try for a specific URL, using discovery if available.
+        Returns discovered types (cached) or fallback hardcoded types.
+        """
+        if wfs_url in self._discovered_types:
+            return self._discovered_types[wfs_url]
+        
+        # Try to discover feature types dynamically
+        discovered = WFSCapabilitiesDiscovery.discover_feature_types(
+            wfs_url,
+            fallback_types=self.FALLBACK_FEATURE_TYPES
+        )
+        
+        # Filter to cadastral types
+        cadastral_types = WFSCapabilitiesDiscovery.filter_cadastral_types(discovered)
+        
+        if cadastral_types and cadastral_types != self.FALLBACK_FEATURE_TYPES:
+            logger.info(f"Using discovered Euskadi feature types for {wfs_url}: {cadastral_types}")
+            self._discovered_types[wfs_url] = cadastral_types
+        else:
+            logger.info(f"Using fallback Euskadi feature types for {wfs_url}")
+            self._discovered_types[wfs_url] = self.FALLBACK_FEATURE_TYPES
+        
+        return self._discovered_types[wfs_url]
+
     
     def query_by_coordinates(
         self,
@@ -1659,12 +1864,12 @@ class EuskadiCatastroClient:
             buffer = 0.0005  # ~50 meters in degrees
             bbox = f"{longitude - buffer},{latitude - buffer},{longitude + buffer},{latitude + buffer},{srs_name}"
             
-            # Try multiple feature types for Euskadi
-            feature_types = [self.FEATURE_TYPE] + self.ALTERNATIVE_FEATURE_TYPES
-            
             # Try each WFS URL and feature type combination
             data = None
             for wfs_url in self.WFS_BASE_URLS:
+                # Get feature types for this URL (dynamically discovered or fallback)
+                feature_types = self._get_feature_types_for_url(wfs_url)
+                
                 for feature_type in feature_types:
                     try:
                         params = {
