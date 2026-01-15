@@ -20,13 +20,13 @@ export interface Parcel {
 // Helper to get auth token from Keycloak or localStorage
 const getAuthToken = (): string | null => {
   if (typeof window === 'undefined') return null;
-  
+
   // Try Keycloak instance first
   const keycloakInstance = (window as any).keycloak;
   if (keycloakInstance && keycloakInstance.token) {
     return keycloakInstance.token;
   }
-  
+
   // Fallback to localStorage
   return localStorage.getItem('auth_token');
 };
@@ -35,7 +35,7 @@ const getAuthToken = (): string | null => {
 const getTenantId = (): string | null => {
   const token = getAuthToken();
   if (!token) return null;
-  
+
   try {
     const base64Url = token.split('.')[1];
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
@@ -58,7 +58,7 @@ class ParcelApiService {
 
   constructor() {
     this.client = new NKZClient({
-      baseURL: '/ngsi-ld/v1',
+      baseUrl: '/ngsi-ld/v1',
       getToken: getAuthToken,
       getTenantId: getTenantId,
       defaultHeaders: {
