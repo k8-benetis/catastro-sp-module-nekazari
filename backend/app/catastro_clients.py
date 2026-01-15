@@ -148,13 +148,15 @@ class WFSCapabilitiesDiscovery:
         Returns:
             Filtered and sorted list
         """
-        # Primary keywords (definitely parcels)
-        primary_keywords = ['parcel', 'finca', 'predio', 'cp:cadastralparcel']
+        # Primary types for cadastral parcels (highest priority)
+        # Added 'urbana' and 'rustica' explicitly for Navarra
+        primary_keywords = ['parcel', 'finca', 'predio', 'cp:cadastralparcel', 'urbana', 'rustica']
         
-        # Secondary keywords (related to cadastre but less specific)
+        # Secondary types (other valid cadastral layers)
         secondary_keywords = ['catast', 'rustic', 'urban', 'cp:']
         
-        # Excluded keywords (administrative units, text, lines)
+        # Excluded keywords (administrative boundaries, text, lines)
+        # Added 'poligono' to exclude "Poligono Catastral" which is a grouping, not a parcel
         excluded_keywords = [
             'municipio', 'concejo', 'cascourbano', 'poligono', 
             'txt', 'lin_', 'line', 'pt_', 'text', 'edif'
@@ -522,7 +524,6 @@ class SpanishStateCatastroClient:
                             try:
                                 val1 = float(coord_pairs[i])
                                 val2 = float(coord_pairs[i + 1])
-                                # INSPIRE often uses lat/lon order, but we need lon/lat for GeoJSON
                                 # If first value is > 90 or < -90, it's likely longitude
                                 # If first value is between -90 and 90, it's likely latitude
                                 if abs(val1) <= 90 and abs(val2) <= 180:
@@ -1179,9 +1180,6 @@ class SpanishStateCatastroClient:
             
             if ldt_elem is not None:
                 logger.info(f"Found ldt element: {etree.tostring(ldt_elem, encoding='unicode', pretty_print=True)[:1000]}")
-            else:
-                # Log the coord element structure to understand what we're getting
-                logger.warning(f"ldt element not found. Coord element structure: {etree.tostring(coord_elem, encoding='unicode', pretty_print=True)[:1500]}")
                 
                 # Extract address from ld/nv
                 ld_elem = ldt_elem.find('{http://www.catastro.meh.es/}ld')
@@ -1227,7 +1225,10 @@ class SpanishStateCatastroClient:
                 if prov_elem is not None and prov_elem.text is not None:
                     result_dict['province'] = prov_elem.text.strip()
                     logger.info(f"Extracted province from provincia: {result_dict['province']}")
-            
+            else:
+                # Log the coord element structure to understand what we're getting
+                logger.warning(f"ldt element not found. Coord element structure: {etree.tostring(coord_elem, encoding='unicode', pretty_print=True)[:1500]}")
+                
             # Also try to extract municipality and province from pc (parcel code) structure
             # pc1 is province code, pc2 is municipality code
             # We can use these codes to look up names, but for now we'll try to get names from XML
@@ -1450,14 +1451,32 @@ class SpanishStateCatastroClient:
                         logger.info(f"Extracted cadastral reference from XML pc: {result_dict['cadastralReference']}")
                 
                 # Extract address from ldt element
+                # Structure can be ldt -> ld -> nv OR just ldt plain text
                 ldt_elem = coord.find('.//ldt') or coord.find('ldt')
                 if ldt_elem is not None:
+                    # Try ld/nv structure
                     ld_elem = ldt_elem.find('.//ld') or ldt_elem.find('ld')
                     if ld_elem is not None:
                         nv_elem = ld_elem.find('nv')
                         if nv_elem is not None and nv_elem.text:
                             result_dict['address'] = nv_elem.text.strip()
                             logger.debug(f"Extracted address from XML ldt/ld/nv: {result_dict['address']}")
+                    
+                    # If not found yet, try direct text or other children
+                    if not result_dict.get('address') and ldt_elem.text:
+                         result_dict['address'] = ldt_elem.text.strip()
+                         logger.debug(f"Extracted address from XML ldt (direct): {result_dict['address']}")
+                    
+                    # Try finding ANY text in ldt if complex structure
+                    if not result_dict.get('address'):
+                        all_text = "".join(ldt_elem.itertext()).strip()
+                        if all_text:
+                            result_dict['address'] = all_text
+                            logger.debug(f"Extracted address from XML ldt (all text): {result_dict['address']}")
+                            
+                # Also look for 'dom' -> 'nm' (Munipio) and 'np' (Provincia) if available
+                # This helps populating municipality/province even if address parsing fails
+                # (Logic to be added if needed, but address parsing is primary)
                 
                 # Extract coordinates from geo element
                 geo_elem = coord.find('.//geo') or coord.find('geo')
@@ -1598,15 +1617,46 @@ class SpanishStateCatastroClient:
 
         try:
             # Common pattern: "MUNICIPIO (PROVINCIA)"
-            if '(' in address and ')' in address:
-                parts = address.split('(')
-                if len(parts) >= 2:
-                    municipality = parts[0].strip()
-                    province = parts[1].rstrip(')').strip()
-                    return municipality, province
-            
-            # Alternative: Try to extract from end of string
             # This is a simple heuristic and may not work for all cases
+            # More robust parsing would involve regex or a dedicated address parser
+            
+            # First, try to find a pattern like "ADDRESS, MUNICIPALITY (PROVINCE)"
+            # or "ADDRESS, MUNICIPALITY, PROVINCE"
+            
+            # Look for (PROVINCE) at the end
+            import re
+            match_paren = re.search(r'(.+),\s*([^,]+)\s*\(([^)]+)\)\s*$', address)
+            if match_paren:
+                # address_part = match_paren.group(1).strip() # Not needed for municipality/province
+                municipality = match_paren.group(2).strip()
+                province = match_paren.group(3).strip()
+                logger.debug(f"Extracted municipality '{municipality}' and province '{province}' from address using (PROVINCE) pattern.")
+                return municipality, province
+            
+            # Look for "MUNICIPALITY, PROVINCE" at the end
+            match_comma = re.search(r'(.+),\s*([^,]+),\s*([^,]+)\s*$', address)
+            if match_comma:
+                # address_part = match_comma.group(1).strip()
+                municipality = match_comma.group(2).strip()
+                province = match_comma.group(3).strip()
+                logger.debug(f"Extracted municipality '{municipality}' and province '{province}' from address using comma pattern.")
+                return municipality, province
+            
+            # If no clear pattern, try to split by last comma or space and assume last part is municipality
+            # This is less reliable
+            parts = [p.strip() for p in address.split(',')]
+            if len(parts) >= 2:
+                # Assume last part is municipality, second to last might be province
+                municipality = parts[-1]
+                province = parts[-2] if len(parts) >= 3 else None
+                logger.debug(f"Extracted municipality '{municipality}' and province '{province}' from address using general split.")
+                return municipality, province
+            elif len(parts) == 1:
+                # If only one part, it might be just the municipality or address
+                # Cannot reliably extract province
+                logger.debug(f"Could not reliably extract municipality/province from single part address: '{address}'")
+                return parts[0], None
+
             return None, None
 
         except Exception as e:
@@ -1825,11 +1875,12 @@ class EuskadiCatastroClient:
     """
     
     # Try different possible WFS URLs for Euskadi
-    WFS_BASE_URLS = [
-        "https://www.geo.euskadi.eus/wfs-katastro",
-        "https://geo.euskadi.eus/wfs-katastro",
-        "https://www.geo.euskadi.eus/ogc/wfs",
-        "https://geo.euskadi.eus/ogc/wfs",
+    BASE_WFS_URLS = [
+        "https://b5m.gipuzkoa.eus/ogc/wfs/gipuzkoa_wfs",  # Gipuzkoa
+        "https://geo.araba.eus/WFS_Katastroa",          # Araba
+        "https://geo.araba.eus/WFS_INSPIRE_CP",         # Araba Inspire
+        # Bizkaia is complex, often requires specific portal. 
+        # Adding generic ones found in documentation just in case
     ]
     FEATURE_TYPE = "CP:CadastralParcel"  # INSPIRE type
     
