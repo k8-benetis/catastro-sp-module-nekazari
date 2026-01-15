@@ -49,12 +49,20 @@ const getTenantId = (): string | null => {
   }
 };
 
+// Get API URL from runtime config
+const getApiUrl = (): string => {
+  if (typeof window !== 'undefined' && (window as any).__ENV__ && (window as any).__ENV__.API_URL) {
+    return (window as any).__ENV__.API_URL;
+  }
+  return 'https://nkz.artotxiki.com'; // Fallback
+};
+
 class CadastralApiService {
   private client: NKZClient;
 
   constructor() {
     this.client = new NKZClient({
-      baseUrl: '/api/cadastral-api',
+      baseUrl: `${getApiUrl()}/api/cadastral-api`,
       getToken: getAuthToken,
       getTenantId: getTenantId,
     });
