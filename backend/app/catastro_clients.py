@@ -1913,7 +1913,7 @@ class EuskadiCatastroClient:
     
     # Try different possible WFS URLs for Euskadi
     WFS_BASE_URLS = [
-        "https://b5m.gipuzkoa.eus/ogc/wfs/gipuzkoa_wfs",  # Gipuzkoa
+        "https://b5m.gipuzkoa.eus/inspire/wfs/gipuzkoa_wfs_cp",  # Gipuzkoa (Correct INSPIRE endpoint)
         "https://geo.araba.eus/WFS_INSPIRE_CP",           # Araba
         "https://geo.bizkaia.eus/bizkaia/services/wfs",   # Bizkaia (Check specific endpoint)
         "https://www.geo.euskadi.eus/wfs-katastro",       # General fallback

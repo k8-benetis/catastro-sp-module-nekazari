@@ -243,9 +243,10 @@ export const CadastralMapClickHandler: React.FC = () => {
       data.geometry.coordinates.length > 0;
 
     if (!hasGeometry) {
+      console.warn('[CadastralMapClickHandler] Parcel missing geometry:', data);
       setNotification({
         type: 'warning',
-        message: 'La entidad seleccionada no tiene geometría disponible.',
+        message: `La entidad seleccionada no tiene geometría disponible. (Debug: Type=${data.geometry?.type}, Coords=${data.geometry?.coordinates ? 'Yes' : 'No'})`,
       });
       clearNotificationAfterDelay();
       setIsProcessing(false);
