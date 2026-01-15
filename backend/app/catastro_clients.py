@@ -2030,7 +2030,7 @@ class EuskadiCatastroClient:
             # Try each WFS URL and feature type combination
             candidates = []
             
-            for wfs_url in self.WFS_BASE_URLS:
+            for wfs_url in self.BASE_WFS_URLS:
                 # Get feature types for this URL (dynamically discovered or fallback)
                 feature_types = self._get_feature_types_for_url(wfs_url)
                 
