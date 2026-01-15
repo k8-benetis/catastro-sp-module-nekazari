@@ -2012,6 +2012,10 @@ class EuskadiCatastroClient:
             
             logger.info(f"Found {len(candidates)} candidates in Euskadi. Primary: {result.get('cadastralReference')}")
             return result
+        
+        except Exception as e:
+            logger.error(f"Error in Euskadi query_by_coordinates: {e}", exc_info=True)
+            return None
     
     def _process_euskadi_feature(self, feature: Dict, feature_type: str, longitude: float, latitude: float) -> Optional[Dict]:
         """Process an Euskadi WFS feature into a standardized candidate dictionary."""
