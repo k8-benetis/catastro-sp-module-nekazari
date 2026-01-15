@@ -1251,11 +1251,16 @@ class SpanishStateCatastroClient:
             
             if ldt_elem is not None:
                 logger.info(f"Found ldt element: {etree.tostring(ldt_elem, encoding='unicode', pretty_print=True)[:1000]}")
+                # Fallback: if we can't extract specific fields, use the whole text as address
+                if ldt_elem.text and ldt_elem.text.strip():
+                     result_dict['address'] = ldt_elem.text.strip()
+                     logger.info(f"Using ldt text as address fallback: {result_dict['address']}")
             else:
                 # Log the coord element structure to understand what we're getting
                 logger.warning(f"ldt element not found. Coord element structure: {etree.tostring(coord_elem, encoding='unicode', pretty_print=True)[:1500]}")
                 
-                # Extract address from ld/nv
+            # Extract address from ld/nv
+            if ldt_elem is not None:
                 ld_elem = ldt_elem.find('{http://www.catastro.meh.es/}ld')
                 if ld_elem is None:
                     ld_elem = ldt_elem.find('ld')
@@ -1265,6 +1270,8 @@ class SpanishStateCatastroClient:
                     if nv_elem is None:
                         nv_elem = ld_elem.find('nv')
                     if nv_elem is not None and nv_elem.text is not None:
+                        # Prefer detailed address parsing if available, but append to fallback if needed
+                        # Or just use this as primary
                         result_dict['address'] = nv_elem.text.strip()
                         logger.info(f"Extracted address from nv: {result_dict['address']}")
                     
@@ -1979,58 +1986,80 @@ class EuskadiCatastroClient:
             
             # Create a larger bounding box around the point (about 50 meters)
             buffer = 0.0005  # ~50 meters in degrees
-            bbox = f"{longitude - buffer},{latitude - buffer},{longitude + buffer},{latitude + buffer},{srs_name}"
+            # Create list of BBOX candidates to try (Standard Lon/Lat, and Swapped Lat/Lon)
+            # WFS 2.0 with EPSG:4326 often expects Lat/Lon order
+            bbox_candidates = [
+                # Standard Lon/Lat (minx, miny, maxx, maxy) e.g. -2.2, 43.2, ...
+                (f"{longitude - buffer},{latitude - buffer},{longitude + buffer},{latitude + buffer},{srs_name}", "Standard (Lon,Lat)"),
+                 # Swapped Lat/Lon (miny, minx, maxy, maxx) e.g. 43.2, -2.2, ... (This is standard for urn:ogc:def:crs:EPSG::4326)
+                (f"{latitude - buffer},{longitude - buffer},{latitude + buffer},{longitude + buffer},{srs_name}", "Swapped (Lat,Lon)")
+            ]
             
             # Try each WFS URL and feature type combination
             data = None
+            found_features = False
+            
             for wfs_url in self.WFS_BASE_URLS:
+                if found_features: break
+                
                 # Get feature types for this URL (dynamically discovered or fallback)
                 feature_types = self._get_feature_types_for_url(wfs_url)
                 
                 for feature_type in feature_types:
-                    try:
-                        params = {
-                            'service': 'WFS',
-                            'version': '2.0.0',
-                            'request': 'GetFeature',
-                            'typeNames': feature_type,
-                            'srsName': srs_name,
-                            'bbox': bbox,
-                            'outputFormat': 'application/json'
-                        }
-                        
-                        logger.info(f"Trying Euskadi WFS: URL={wfs_url}, feature_type={feature_type}, bbox={bbox}")
-                        response = self.session.get(wfs_url, params=params, timeout=15)
-                        
-                        # Log response status for debugging
-                        logger.debug(f"Euskadi WFS response status: {response.status_code}")
-                        
-                        if response.status_code == 200:
-                            try:
-                                data = response.json()
-                                if 'features' in data and len(data['features']) > 0:
-                                    logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}, type={feature_type}")
-                                    break
-                                else:
-                                    logger.debug(f"No features in response from {wfs_url} with type {feature_type}")
-                            except ValueError as e:
-                                # Not JSON, might be XML or error
-                                logger.warning(f"Euskadi WFS response is not JSON from {wfs_url}: {e}")
-                                logger.debug(f"Response content (first 500 chars): {response.text[:500] if hasattr(response, 'text') else response.content[:500]}")
-                        else:
-                            logger.debug(f"Euskadi WFS returned status {response.status_code} from {wfs_url}")
-                    except requests.exceptions.RequestException as e:
-                        logger.debug(f"Request error with {wfs_url}, type {feature_type}: {e}")
-                        continue
-                    except Exception as e:
-                        logger.debug(f"Error with {wfs_url}, type {feature_type}: {e}")
-                        continue
+                    if found_features: break
+                    
+                    # Try both BBOX formats
+                    for bbox, bbox_desc in bbox_candidates:
+                        try:
+                            params = {
+                                'service': 'WFS',
+                                'version': '2.0.0',
+                                'request': 'GetFeature',
+                                'typeNames': feature_type,
+                                'srsName': srs_name,
+                                'bbox': bbox,
+                                'outputFormat': 'application/json'
+                            }
+                            
+                            logger.info(f"Trying Euskadi WFS ({bbox_desc}): URL={wfs_url}, feature_type={feature_type}, bbox={bbox}")
+                            response = self.session.get(wfs_url, params=params, timeout=15)
+                            
+                            # Log response status for debugging
+                            logger.debug(f"Euskadi WFS response status: {response.status_code}")
+                            
+                            if response.status_code == 200:
+                                try:
+                                    # Check content type for JSON
+                                    if 'json' in response.headers.get('Content-Type', '').lower() or response.text.strip().startswith('{'):
+                                        data = response.json()
+                                        if 'features' in data and len(data['features']) > 0:
+                                            logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}, type={feature_type}, bbox={bbox_desc}")
+                                            found_features = True
+                                            break
+                                        else:
+                                            logger.debug(f"No features in response from {wfs_url} with type {feature_type} ({bbox_desc})")
+                                    else:
+                                         logger.warning(f"Euskadi WFS response is not JSON from {wfs_url} ({bbox_desc})")
+                                         # Log first 500 chars to see if it's XML error
+                                         logger.debug(f"Response content: {response.text[:500]}")
+
+                                except ValueError as e:
+                                    # Not JSON, might be XML or error
+                                    logger.warning(f"Euskadi WFS response JSON parse error from {wfs_url}: {e}")
+                            else:
+                                logger.debug(f"Euskadi WFS returned status {response.status_code} from {wfs_url}")
+                        except requests.exceptions.RequestException as e:
+                            logger.debug(f"Request error with {wfs_url}, type {feature_type}: {e}")
+                            continue
+                        except Exception as e:
+                            logger.debug(f"Error with {wfs_url}, type {feature_type}: {e}")
+                            continue
                 
-                if data and 'features' in data and len(data['features']) > 0:
+                if found_features:
                     break
             
             if not data or 'features' not in data or len(data['features']) == 0:
-                logger.warning(f"No features found in Euskadi WFS for coordinates ({longitude}, {latitude}) after trying all URLs and feature types")
+                logger.warning(f"No features found in Euskadi WFS for coordinates ({longitude}, {latitude}) after trying all URLs, feature types and BBOX formats")
                 return None
             
             # Parse GeoJSON response
