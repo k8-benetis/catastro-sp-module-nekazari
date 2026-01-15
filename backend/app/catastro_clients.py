@@ -1008,13 +1008,17 @@ class SpanishStateCatastroClient:
                  logger.warning(f"No cadastral data found for coordinates ({longitude}, {latitude})")
                  return None
             
+            # Enrich candidates with geometry (limit 5)
+            candidates = self._enrich_candidates_with_geometry(candidates, srs)
+            
             # Primary candidate is the first one (usually the best match)
             # OR we can do some logic to find the best one.
             # For backward compatibility, populating top-level fields with the first one.
             primary = candidates[0]
             
-            # Retrieve geometry for the primary candidate only (costly operation)
-            if primary.get('cadastralReference'):
+            # Retrieve geometry for the primary candidate only IF NOT already enriched
+            # (Fetching enriched geometry sets it in the dict)
+            if primary.get('cadastralReference') and not primary.get('geometry'):
                  geometry = self.get_parcel_geometry(primary['cadastralReference'], srs)
                  primary['geometry'] = geometry
 
