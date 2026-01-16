@@ -1915,7 +1915,7 @@ class EuskadiCatastroClient:
     WFS_BASE_URLS = [
         "https://b5m.gipuzkoa.eus/inspire/wfs/gipuzkoa_wfs_cp",  # Gipuzkoa (Correct INSPIRE endpoint)
         "https://geo.araba.eus/WFS_INSPIRE_CP",           # Araba
-        "https://geo.bizkaia.eus/bizkaia/services/wfs",   # Bizkaia (Check specific endpoint)
+        "https://geo.bizkaia.eus/arcgisserverinspire/services/LurraldeAntolamendua_PlanificacionTerritorial/Katastro_Catastro/MapServer/WFSServer", # Bizkaia (Verified)
         "https://www.geo.euskadi.eus/wfs-katastro",       # General fallback
         "https://geo.euskadi.eus/wfs-katastro",
     ]

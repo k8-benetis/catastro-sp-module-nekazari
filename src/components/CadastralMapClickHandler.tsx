@@ -165,6 +165,73 @@ export const CadastralMapClickHandler: React.FC = () => {
     };
   }, [isEntitiesPage, cesiumViewer, isClickEnabled, isProcessing, pendingParcel, candidates]);
 
+  // Render pending parcel on map
+  useEffect(() => {
+    if (!cesiumViewer || !pendingParcel) return;
+
+    // @ts-ignore
+    const Cesium = window.Cesium;
+    if (!Cesium) return;
+
+    let entity: any = null;
+
+    try {
+      console.log('[CadastralMapClickHandler] Rendering pending parcel geometry...', pendingParcel.data.geometry?.type);
+
+      const geometry = pendingParcel.data.geometry;
+      if (!geometry || !geometry.coordinates) return;
+
+      // Handle Polygon and MultiPolygon
+      const hierarchy = createCesiumHierarchy(Cesium, geometry);
+
+      if (hierarchy) {
+        entity = cesiumViewer.entities.add({
+          name: 'Pending Parcel',
+          polygon: {
+            hierarchy: hierarchy,
+            material: Cesium.Color.YELLOW.withAlpha(0.5),
+            outline: true,
+            outlineColor: Cesium.Color.YELLOW,
+            outlineWidth: 2,
+            height: 0, // Clamp to ground
+            classificationType: Cesium.ClassificationType.TERRAIN // Ensure it renders on terrain
+          }
+        });
+
+        cesiumViewer.flyTo(entity, { duration: 1.0, offset: new Cesium.HeadingPitchRange(0, -1.0, 500) });
+      }
+    } catch (e) {
+      console.error('[CadastralMapClickHandler] Error rendering pending parcel:', e);
+    }
+
+    return () => {
+      if (entity) {
+        cesiumViewer.entities.remove(entity);
+      }
+    };
+  }, [cesiumViewer, pendingParcel]);
+
+  // Helper to create Cesium hierarchy from GeoJSON
+  const createCesiumHierarchy = (Cesium: any, geometry: any) => {
+    if (geometry.type === 'Polygon') {
+      return new Cesium.PolygonHierarchy(
+        Cesium.Cartesian3.fromDegreesArray(geometry.coordinates[0].flat())
+      );
+    } else if (geometry.type === 'MultiPolygon') {
+      // Flatten MultiPolygon to single hierarchy (simple approach) or return array?
+      // Cesium Entity Polygon hierarchy supports holes but not disjoint polygons well in one entity 
+      // unless we use a callback or composite. 
+      // For simplicity, let's render the FIRST polygon of the MultiPolygon for visualization
+      // Or merge them if relevant. Navarra usually returns 1 main polygon.
+      if (geometry.coordinates.length > 0) {
+        return new Cesium.PolygonHierarchy(
+          Cesium.Cartesian3.fromDegreesArray(geometry.coordinates[0][0].flat())
+        );
+      }
+    }
+    return null;
+  };
+
   const handleMapClick = async (longitude: number, latitude: number) => {
     setIsProcessing(true);
     setNotification(null);
