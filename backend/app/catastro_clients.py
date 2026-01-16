@@ -2082,19 +2082,20 @@ class EuskadiCatastroClient:
                                             found_features = True
                                             break
 
-                            elif response.status_code == 400 and 'outputFormat' in response.text:
-                                # Fallback: Retry without outputFormat=json if server rejects it
-                                logger.warning(f"Server rejected outputFormat=json at {wfs_url}, retrying with default (XML)...")
-                                del params['outputFormat']
-                                response = self.session.get(wfs_url, params=params, timeout=15)
-                                if response.status_code == 200:
-                                     feature = self._parse_wfs_xml_response(response.content)
-                                     if feature:
-                                         data = {"type": "FeatureCollection", "features": [feature]}
-                                         found_features = True
-                                         break
-                            else:
-                                logger.debug(f"Euskadi WFS returned status {response.status_code} from {wfs_url}")
+                                elif response.status_code == 400 and 'outputFormat' in response.text:
+                                    # Fallback: Retry without outputFormat=json if server rejects it
+                                    logger.warning(f"Server rejected outputFormat=json at {wfs_url}, retrying with default (XML)...")
+                                    if 'outputFormat' in params:
+                                        del params['outputFormat']
+                                    response = self.session.get(wfs_url, params=params, timeout=15)
+                                    if response.status_code == 200:
+                                         feature = self._parse_wfs_xml_response(response.content)
+                                         if feature:
+                                             data = {"type": "FeatureCollection", "features": [feature]}
+                                             found_features = True
+                                             break
+                                else:
+                                    logger.debug(f"Euskadi WFS returned status {response.status_code} from {wfs_url}")
                         except requests.exceptions.RequestException as e:
                             logger.debug(f"Request error with {wfs_url}, type {feature_type}: {e}")
                             continue
