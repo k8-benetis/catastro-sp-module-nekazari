@@ -1829,6 +1829,15 @@ class NavarraCatastroClient:
             logger.info(f"Navarra WFS properties keys: {list(properties.keys())}")
             logger.info(f"Navarra WFS geometry present: {geometry is not None}, type: {type(geometry)}")
             if geometry:
+                # Normalize MultiPolygon to Polygon for compatibility with frontend/platform
+                if geometry.get('type') == 'MultiPolygon' and geometry.get('coordinates'):
+                    logger.info("Normalizing Navarra MultiPolygon to Polygon (taking first polygon)")
+                    # Take the first polygon from the multipolygon
+                    # MultiPolygon coords: [[[[x,y],...]], ...]
+                    # Polygon coords: [[[x,y],...]]
+                    geometry['type'] = 'Polygon'
+                    geometry['coordinates'] = geometry['coordinates'][0]
+
                 logger.info(f"Navarra WFS geometry keys: {list(geometry.keys()) if isinstance(geometry, dict) else 'N/A'}")
                 logger.info(f"Navarra WFS geometry type: {geometry.get('type') if isinstance(geometry, dict) else 'N/A'}")
             else:
@@ -2023,6 +2032,7 @@ class EuskadiCatastroClient:
                             
                             logger.info(f"Trying Euskadi WFS ({bbox_desc}): URL={wfs_url}, feature_type={feature_type}, bbox={bbox}")
                             response = self.session.get(wfs_url, params=params, timeout=15)
+                            logger.info(f"Full WFS Request URL: {response.url}")
                             
                             # Log response status for debugging
                             logger.debug(f"Euskadi WFS response status: {response.status_code}")
