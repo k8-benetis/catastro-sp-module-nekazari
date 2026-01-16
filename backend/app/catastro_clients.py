@@ -2096,12 +2096,12 @@ class EuskadiCatastroClient:
                                              break
                                 else:
                                     logger.debug(f"Euskadi WFS returned status {response.status_code} from {wfs_url}")
-                        except requests.exceptions.RequestException as e:
-                            logger.debug(f"Request error with {wfs_url}, type {feature_type}: {e}")
-                            continue
-                        except Exception as e:
-                            logger.debug(f"Error with {wfs_url}, type {feature_type}: {e}")
-                            continue
+                            except requests.exceptions.RequestException as e:
+                                logger.debug(f"Request error with {wfs_url}, type {feature_type}: {e}")
+                                continue
+                            except Exception as e:
+                                logger.debug(f"Error with {wfs_url}, type {feature_type}: {e}")
+                                continue
                 
                 if found_features:
                     break
