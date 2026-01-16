@@ -2230,32 +2230,92 @@ class EuskadiCatastroClient:
                      else:
                          ref_cat = gml_id
 
+            # Extract Metadata (Address, Municipality)
+            municipality = None
+            province = None
+            address = None
+            
+            # Try INSPIRE Address format or national extensions
+            # Look for th:ThoroughfareName, ad:AddressAreaName, etc. (names vary by schema version)
+            # Simplistic approach: look for any text fields in <cp:location> or similar
+            
+            # Try to find CadastralZoning reference which often contains municipality info
+            zoning = parcel.xpath('.//cp:zoning', namespaces=ns)
+            if zoning:
+                # zoning text might look like "ES.GIPUZKOA.MUNICIPIO.014..."
+                # Extracting readable name is hard from codes without a lookup table.
+                pass
+
+            # Fallback: Navarra/Gipuzkoa specific properties if present (non-standard GML)
+            # Searching for common tag names regardless of namespace
+            for tag in ['municipio', 'municipality', 'nombreMunicipio', 'alerrea']:
+                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes and nodes[0].text:
+                    municipality = nodes[0].text
+                    break
+            
+            for tag in ['provincia', 'province', 'herrialdea']:
+                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes and nodes[0].text:
+                    province = nodes[0].text
+                    break
+            
             # Extract Geometry (Polygon)
             geometry = None
             # Find posList
             pos_lists = parcel.xpath('.//gml:posList', namespaces=ns)
             if pos_lists and pos_lists[0].text:
                 coords_text = pos_lists[0].text.strip().split()
-                # Parse standard GML posList (lat lon lat lon...)
-                # Convert to [[lon, lat], [lon, lat]...]
+                # Parse standard GML posList
                 
                 coords = []
-                for i in range(0, len(coords_text), 2):
-                    if i+1 < len(coords_text):
-                        try:
-                            val1 = float(coords_text[i])
-                            val2 = float(coords_text[i+1])
-                            # Assumption: GML 4258/4326 is Lat Lon
-                            # GeoJSON needs Lon Lat
-                            coords.append([val2, val1]) 
-                        except ValueError:
-                            continue
+                # Smart Coordinate Ordering Heuristic
+                # Check sample point (first pair)
+                if len(coords_text) >= 2:
+                    try:
+                        v1 = float(coords_text[0])
+                        v2 = float(coords_text[1])
+                        
+                        # Heuristic for Spain/Euskadi Lat/Lon (approx)
+                        # Lat: 35 to 45
+                        # Lon: -10 to 5
+                        
+                        swap_xy = True # Default assumption (GML often Lat Lon)
+                        
+                        if (35 <= v1 <= 45) and (-10 <= v2 <= 5):
+                            # v1 is Lat, v2 is Lon. We need [Lon, Lat] for GeoJSON
+                            # So swap is True ([v2, v1])
+                            swap_xy = True
+                            logger.info(f"Detected Lat-Lon order in GML ({v1}, {v2}), swapping for GeoJSON")
+                        elif (35 <= v2 <= 45) and (-10 <= v1 <= 5):
+                            # v1 is Lon, v2 is Lat. We need [Lon, Lat]
+                            # So swap is False ([v1, v2])
+                            swap_xy = False
+                            logger.info(f"Detected Lon-Lat order in GML ({v1}, {v2}), using as-is")
+                        else:
+                            # If numbers are huge, it's UTM. We can't handle UTM here without pyproj transform context
+                            # But usually WFS returns what we asked (4326). If it returns UTM, we might be stuck.
+                            # Assuming standard GML default (Lat Lon)
+                            pass
+
+                        for i in range(0, len(coords_text), 2):
+                            if i+1 < len(coords_text):
+                                val1 = float(coords_text[i])
+                                val2 = float(coords_text[i+1])
+                                if swap_xy:
+                                    coords.append([val2, val1]) 
+                                else:
+                                    coords.append([val1, val2])
+                    except ValueError:
+                        pass
                             
                 if coords:
                     geometry = {
                         "type": "Polygon",
                         "coordinates": [coords] # Polygon expects ring inside outer array
                     }
+            
+            # Extract Area (already there)
             
             # Extract Area
             area = 0.0
@@ -2272,9 +2332,9 @@ class EuskadiCatastroClient:
                 "properties": {
                     "cadastralReference": ref_cat,
                     "area": area,
-                    # Add dummy municipality if not found, or try to parse from namespace or ID
-                    "municipality": "",
-                    "province": "Gipuzkoa" if "GFA" in (ref_cat or "") else "Euskadi"
+                    "municipality": municipality,
+                    "province": province or ("Gipuzkoa" if "GFA" in (ref_cat or "") else "Euskadi"),
+                    "address": address
                 }
             }
 
