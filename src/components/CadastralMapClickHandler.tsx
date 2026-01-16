@@ -198,7 +198,7 @@ export const CadastralMapClickHandler: React.FC = () => {
           }
         });
 
-        cesiumViewer.flyTo(entity, { duration: 1.0, offset: new Cesium.HeadingPitchRange(0, -1.0, 500) });
+        cesiumViewer.flyTo(entity, { duration: 1.0, offset: new Cesium.HeadingPitchRange(0, -1.0, 1500) });
       }
     } catch (e) {
       console.error('[CadastralMapClickHandler] Error rendering pending parcel:', e);

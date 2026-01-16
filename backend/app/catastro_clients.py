@@ -2019,25 +2019,35 @@ class EuskadiCatastroClient:
                     
                     # Try both BBOX formats
                     for bbox, bbox_desc in bbox_candidates:
-                        try:
-                            params = {
-                                'service': 'WFS',
-                                'version': '2.0.0',
-                                'request': 'GetFeature',
-                                'typeNames': feature_type,
-                                'srsName': srs_name,
-                                'bbox': bbox,
-                                'outputFormat': 'application/json'
-                            }
-                            
-                            logger.info(f"Trying Euskadi WFS ({bbox_desc}): URL={wfs_url}, feature_type={feature_type}, bbox={bbox}")
-                            response = self.session.get(wfs_url, params=params, timeout=15)
-                            logger.info(f"Full WFS Request URL: {response.url}")
-                            
-                            # Log response status for debugging
-                            logger.debug(f"Euskadi WFS response status: {response.status_code}")
-                            
-                            if response.status_code == 200:
+                        # Try different WFS versions (Bizkaia/ArcGIS might prefer 1.1.0 or 1.0.0)
+                        for wfs_version in ['2.0.0', '1.1.0', '1.0.0']: 
+                            try:
+                                params = {
+                                    'service': 'WFS',
+                                    'version': wfs_version,
+                                    'request': 'GetFeature',
+                                    'typeNames': feature_type, # WFS 2.0
+                                    'typeName': feature_type,  # WFS 1.1/1.0 (requests handles duplicate params gracefully usually, or we set both? No, standard varies)
+                                    'srsName': srs_name,
+                                    'bbox': bbox,
+                                    'outputFormat': 'application/json'
+                                }
+                                
+                                # Adjust params for older versions if needed
+                                if wfs_version != '2.0.0':
+                                    if 'typeNames' in params: del params['typeNames']
+                                    params['typeName'] = feature_type
+                                else:
+                                    if 'typeName' in params: del params['typeName']
+                                    params['typeNames'] = feature_type
+
+                                logger.info(f"Trying Euskadi WFS ({bbox_desc}) v{wfs_version}: URL={wfs_url}, type={feature_type}")
+                                response = self.session.get(wfs_url, params=params, timeout=15)
+                                
+                                # Log response status for debugging
+                                logger.debug(f"Euskadi WFS v{wfs_version} response status: {response.status_code}")
+                                
+                                if response.status_code == 200:
                                 try:
                                     # Check content type for JSON
                                     is_json = 'json' in response.headers.get('Content-Type', '').lower() or response.text.strip().startswith('{')
