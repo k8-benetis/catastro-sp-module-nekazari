@@ -2027,10 +2027,10 @@ class EuskadiCatastroClient:
                             # Log response status for debugging
                             logger.debug(f"Euskadi WFS response status: {response.status_code}")
                             
-                            if response.status_code == 200:
-                                try:
                                     # Check content type for JSON
-                                    if 'json' in response.headers.get('Content-Type', '').lower() or response.text.strip().startswith('{'):
+                                    is_json = 'json' in response.headers.get('Content-Type', '').lower() or response.text.strip().startswith('{')
+                                    
+                                    if is_json:
                                         data = response.json()
                                         if 'features' in data and len(data['features']) > 0:
                                             logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}, type={feature_type}, bbox={bbox_desc}")
@@ -2039,13 +2039,38 @@ class EuskadiCatastroClient:
                                         else:
                                             logger.debug(f"No features in response from {wfs_url} with type {feature_type} ({bbox_desc})")
                                     else:
-                                         logger.warning(f"Euskadi WFS response is not JSON from {wfs_url} ({bbox_desc})")
-                                         # Log first 500 chars to see if it's XML error
-                                         logger.debug(f"Response content: {response.text[:500]}")
+                                         logger.info(f"Euskadi WFS response is not JSON from {wfs_url} ({bbox_desc}), attempting XML parsing")
+                                         # Try parsing as XML
+                                         feature = self._parse_wfs_xml_response(response.content)
+                                         if feature:
+                                             # Fake a FeatureCollection structure
+                                             data = {
+                                                 "type": "FeatureCollection",
+                                                 "features": [feature]
+                                             }
+                                             logger.info(f"Successfully parsed XML feature from {wfs_url}")
+                                             found_features = True
+                                             break
 
                                 except ValueError as e:
-                                    # Not JSON, might be XML or error
-                                    logger.warning(f"Euskadi WFS response JSON parse error from {wfs_url}: {e}")
+                                    logger.warning(f"Euskadi WFS response JSON parse error from {wfs_url}, trying XML: {e}")
+                                    feature = self._parse_wfs_xml_response(response.content)
+                                    if feature:
+                                        data = {"type": "FeatureCollection", "features": [feature]}
+                                        found_features = True
+                                        break
+
+                            elif response.status_code == 400 and 'outputFormat' in response.text:
+                                # Fallback: Retry without outputFormat=json if server rejects it
+                                logger.warning(f"Server rejected outputFormat=json at {wfs_url}, retrying with default (XML)...")
+                                del params['outputFormat']
+                                response = self.session.get(wfs_url, params=params, timeout=15)
+                                if response.status_code == 200:
+                                     feature = self._parse_wfs_xml_response(response.content)
+                                     if feature:
+                                         data = {"type": "FeatureCollection", "features": [feature]}
+                                         found_features = True
+                                         break
                             else:
                                 logger.debug(f"Euskadi WFS returned status {response.status_code} from {wfs_url}")
                         except requests.exceptions.RequestException as e:
@@ -2133,4 +2158,104 @@ class EuskadiCatastroClient:
             return None
         except Exception as e:
             logger.error(f"Unexpected error querying Euskadi cadastre: {e}", exc_info=True)
+            return None
+
+    def _parse_wfs_xml_response(self, content: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Parse WFS GML/XML response when JSON is not available.
+        Extracts the first parcel found.
+        """
+        try:
+            from lxml import etree
+            root = etree.fromstring(content)
+            
+            # namespaces
+            ns = {
+                'wfs': 'http://www.opengis.net/wfs/2.0',
+                'gml': 'http://www.opengis.net/gml/3.2',
+                'cp': 'http://inspire.ec.europa.eu/schemas/cp/4.0'
+            }
+            
+            # Find member/CadastralParcel
+            # Use local-name() to be safe against namespace variations
+            parcel = root.xpath('//cp:CadastralParcel', namespaces=ns)
+            if not parcel:
+                # Try without prefix filtering if needed, or check bounds
+                parcel = root.xpath('//*[local-name()="CadastralParcel"]')
+                
+            if not parcel:
+                return None
+                
+            parcel = parcel[0]
+            
+            # Extract Reference
+            ref_cat = None
+            # Standard INSPIRE: inspireId/Identifier/localId
+            local_id = parcel.xpath('.//cp:inspireId//cp:localId', namespaces=ns)
+            if not local_id:
+                 local_id = parcel.xpath('.//*[local-name()="localId"]')
+            
+            if local_id and local_id[0].text:
+                ref_cat = local_id[0].text
+            else:
+                # Fallback to gml:id
+                gml_id = parcel.get(f"{{{ns['gml']}}}id")
+                if gml_id:
+                    # Often format is ES.GFA.CP.RefCat
+                     parts = gml_id.split('.')
+                     if len(parts) > 3:
+                         ref_cat = parts[-1] 
+                     else:
+                         ref_cat = gml_id
+
+            # Extract Geometry (Polygon)
+            geometry = None
+            # Find posList
+            pos_lists = parcel.xpath('.//gml:posList', namespaces=ns)
+            if pos_lists and pos_lists[0].text:
+                coords_text = pos_lists[0].text.strip().split()
+                # Parse standard GML posList (lat lon lat lon...)
+                # Convert to [[lon, lat], [lon, lat]...]
+                
+                coords = []
+                for i in range(0, len(coords_text), 2):
+                    if i+1 < len(coords_text):
+                        try:
+                            val1 = float(coords_text[i])
+                            val2 = float(coords_text[i+1])
+                            # Assumption: GML 4258/4326 is Lat Lon
+                            # GeoJSON needs Lon Lat
+                            coords.append([val2, val1]) 
+                        except ValueError:
+                            continue
+                            
+                if coords:
+                    geometry = {
+                        "type": "Polygon",
+                        "coordinates": [coords] # Polygon expects ring inside outer array
+                    }
+            
+            # Extract Area
+            area = 0.0
+            area_elem = parcel.xpath('.//cp:areaValue', namespaces=ns)
+            if area_elem and area_elem[0].text:
+                try:
+                    area = float(area_elem[0].text) / 10000.0 # m2 to hectares
+                except:
+                    pass
+
+            return {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": {
+                    "cadastralReference": ref_cat,
+                    "area": area,
+                    # Add dummy municipality if not found, or try to parse from namespace or ID
+                    "municipality": "",
+                    "province": "Gipuzkoa" if "GFA" in (ref_cat or "") else "Euskadi"
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Error parsing Euskadi WFS XML: {e}")
             return None
