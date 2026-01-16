@@ -2027,6 +2027,8 @@ class EuskadiCatastroClient:
                             # Log response status for debugging
                             logger.debug(f"Euskadi WFS response status: {response.status_code}")
                             
+                            if response.status_code == 200:
+                                try:
                                     # Check content type for JSON
                                     is_json = 'json' in response.headers.get('Content-Type', '').lower() or response.text.strip().startswith('{')
                                     
