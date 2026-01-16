@@ -2048,39 +2048,39 @@ class EuskadiCatastroClient:
                                 logger.debug(f"Euskadi WFS v{wfs_version} response status: {response.status_code}")
                                 
                                 if response.status_code == 200:
-                                try:
-                                    # Check content type for JSON
-                                    is_json = 'json' in response.headers.get('Content-Type', '').lower() or response.text.strip().startswith('{')
-                                    
-                                    if is_json:
-                                        data = response.json()
-                                        if 'features' in data and len(data['features']) > 0:
-                                            logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}, type={feature_type}, bbox={bbox_desc}")
+                                    try:
+                                        # Check content type for JSON
+                                        is_json = 'json' in response.headers.get('Content-Type', '').lower() or response.text.strip().startswith('{')
+                                        
+                                        if is_json:
+                                            data = response.json()
+                                            if 'features' in data and len(data['features']) > 0:
+                                                logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}, type={feature_type}, bbox={bbox_desc}")
+                                                found_features = True
+                                                break
+                                            else:
+                                                logger.debug(f"No features in response from {wfs_url} with type {feature_type} ({bbox_desc})")
+                                        else:
+                                             logger.info(f"Euskadi WFS response is not JSON from {wfs_url} ({bbox_desc}), attempting XML parsing")
+                                             # Try parsing as XML
+                                             feature = self._parse_wfs_xml_response(response.content)
+                                             if feature:
+                                                 # Fake a FeatureCollection structure
+                                                 data = {
+                                                     "type": "FeatureCollection",
+                                                     "features": [feature]
+                                                 }
+                                                 logger.info(f"Successfully parsed XML feature from {wfs_url}")
+                                                 found_features = True
+                                                 break
+
+                                    except ValueError as e:
+                                        logger.warning(f"Euskadi WFS response JSON parse error from {wfs_url}, trying XML: {e}")
+                                        feature = self._parse_wfs_xml_response(response.content)
+                                        if feature:
+                                            data = {"type": "FeatureCollection", "features": [feature]}
                                             found_features = True
                                             break
-                                        else:
-                                            logger.debug(f"No features in response from {wfs_url} with type {feature_type} ({bbox_desc})")
-                                    else:
-                                         logger.info(f"Euskadi WFS response is not JSON from {wfs_url} ({bbox_desc}), attempting XML parsing")
-                                         # Try parsing as XML
-                                         feature = self._parse_wfs_xml_response(response.content)
-                                         if feature:
-                                             # Fake a FeatureCollection structure
-                                             data = {
-                                                 "type": "FeatureCollection",
-                                                 "features": [feature]
-                                             }
-                                             logger.info(f"Successfully parsed XML feature from {wfs_url}")
-                                             found_features = True
-                                             break
-
-                                except ValueError as e:
-                                    logger.warning(f"Euskadi WFS response JSON parse error from {wfs_url}, trying XML: {e}")
-                                    feature = self._parse_wfs_xml_response(response.content)
-                                    if feature:
-                                        data = {"type": "FeatureCollection", "features": [feature]}
-                                        found_features = True
-                                        break
 
                             elif response.status_code == 400 and 'outputFormat' in response.text:
                                 # Fallback: Retry without outputFormat=json if server rejects it
