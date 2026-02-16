@@ -51,10 +51,20 @@ const getTenantId = (): string | null => {
 
 // Get API URL from runtime config
 const getApiUrl = (): string => {
-  if (typeof window !== 'undefined' && (window as any).__ENV__ && (window as any).__ENV__.API_URL) {
-    return (window as any).__ENV__.API_URL;
+  if (typeof window !== 'undefined') {
+    // 1. Use host's runtime config if available
+    if ((window as any).__ENV__?.API_URL) {
+      return (window as any).__ENV__.API_URL;
+    }
+    // 2. Derive from current origin: nekazari.{domain} → nkz.{domain}
+    const origin = window.location.origin;
+    if (origin.includes('nekazari.')) {
+      return origin.replace('nekazari.', 'nkz.');
+    }
+    // 3. Localhost fallback for dev
+    return origin;
   }
-  return 'https://nkz.robotika.cloud'; // Fallback
+  return '';
 };
 
 class CadastralApiService {
