@@ -1,6 +1,7 @@
 import React from 'react';
 import { CadastralMapClickHandler } from '../components/CadastralMapClickHandler';
 import { CadastralClickToggle } from '../components/CadastralClickToggle';
+import { GeoSearchBar } from '../components/GeoSearchBar';
 import { CadastralProvider } from '../context/CadastralContext';
 import type { ModuleViewerSlots, SlotWidgetDefinition } from '@nekazari/sdk';
 
@@ -11,9 +12,9 @@ const MODULE_ID = 'catastro-spain';
  * Catastro Spain Module Slots Configuration
  * 
  * All widgets include explicit moduleId for proper host integration.
- * This module adds click-to-add functionality for cadastral parcels
- * on the /entities page. When a user clicks on the map, it queries
- * the cadastral service and shows a confirmation dialog before creating the parcel.
+ * This module adds:
+ * - Click-to-add functionality for cadastral parcels on the /entities page
+ * - Geocoding search bar to navigate to locations by name or postal code
  */
 export const moduleSlots: ModuleViewerSlots = {
   'map-layer': [
@@ -23,6 +24,13 @@ export const moduleSlots: ModuleViewerSlots = {
       component: 'CadastralMapClickHandler',
       priority: 100,
       localComponent: CadastralMapClickHandler,
+    },
+    {
+      id: 'catastro-spain-geo-search',
+      moduleId: MODULE_ID,
+      component: 'GeoSearchBar',
+      priority: 50,
+      localComponent: GeoSearchBar,
     },
   ],
   'layer-toggle': [
