@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@nekazari/module-builder':
+        specifier: file:../nkz/packages/module-builder
+        version: file:../nkz/packages/module-builder(vite@5.4.21)
       '@nekazari/sdk':
         specifier: ^1.0.0
         version: 1.0.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -304,6 +307,11 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@nekazari/module-builder@file:../nkz/packages/module-builder':
+    resolution: {directory: ../nkz/packages/module-builder, type: directory}
+    peerDependencies:
+      vite: '>=5.0.0'
 
   '@nekazari/sdk@1.0.3':
     resolution: {integrity: sha512-CbxmMQdHVUkHz0q6HJcBrhnZqy8N6eclqRm6gcbbLAL4m9H7Tod3C0qTLwt+92r0YI66UvxFHTKHAbYyBFXLFw==}
@@ -1285,6 +1293,10 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@nekazari/module-builder@file:../nkz/packages/module-builder(vite@5.4.21)':
+    dependencies:
+      vite: 5.4.21
 
   '@nekazari/sdk@1.0.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:

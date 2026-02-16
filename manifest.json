@@ -20,7 +20,7 @@
   "frontend": {
     "enabled": true,
     "port": 5004,
-    "remoteEntry": "./remoteEntry.js"
+    "remoteEntry": "./nkz-module.js"
   },
   "dependencies": {
     "services": [
