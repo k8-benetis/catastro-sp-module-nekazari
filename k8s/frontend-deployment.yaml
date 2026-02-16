@@ -31,31 +31,31 @@ spec:
       imagePullSecrets:
         - name: ghcr-secret
       containers:
-      - name: nginx
-        image: ghcr.io/k8-benetis/catastro-sp-module-nekazari/catastro-spain-frontend:latest
-        imagePullPolicy: Always
-        ports:
-        - name: http
-          containerPort: 80
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "50m"
-          limits:
-            memory: "128Mi"
-            cpu: "100m"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 80
-          initialDelaySeconds: 10
-          periodSeconds: 30
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 80
-          initialDelaySeconds: 5
-          periodSeconds: 10
+        - name: nginx
+          image: ghcr.io/k8-benetis/catastro-sp-module-nekazari/catastro-frontend-auto:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
 
 ---
 # Service: Catastro Spain Frontend
@@ -73,8 +73,7 @@ spec:
   selector:
     app: catastro-spain-frontend
   ports:
-  - name: http
-    port: 80
-    targetPort: 80
-    protocol: TCP
-
+    - name: http
+      port: 80
+      targetPort: 80
+      protocol: TCP
