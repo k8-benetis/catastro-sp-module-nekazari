@@ -46,7 +46,7 @@ export default defineConfig({
     cors: true,
     proxy: {
       '/api': {
-        target: 'https://nkz.artotxiki.com',
+        target: 'https://nkz.robotika.cloud',
         changeOrigin: true,
         secure: true,
       },

@@ -71,3 +71,4 @@ const CatastroSpainApp: React.FC = () => {
 // CRITICAL: Export as default - required for Module Federation
 export default CatastroSpainApp;
 
+

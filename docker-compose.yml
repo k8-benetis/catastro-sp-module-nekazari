@@ -9,7 +9,7 @@
 #   docker-compose down      # Stop all services
 # =============================================================================
 
-version: '3.8'
+version: "3.8"
 
 services:
   # Frontend development server
@@ -40,7 +40,7 @@ services:
       - APP_NAME=MODULE_DISPLAY_NAME
       - DEBUG=true
       - API_PREFIX=/api/MODULE_NAME
-      - KEYCLOAK_URL=https://auth.artotxiki.com/auth
+      - KEYCLOAK_URL=https://auth.robotika.cloud/auth
       - KEYCLOAK_REALM=nekazari
       - JWT_AUDIENCE=account
       - CORS_ORIGINS=["http://localhost:5003","http://localhost:5173","http://localhost:8000"]
@@ -52,39 +52,37 @@ services:
       timeout: 10s
       retries: 3
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-
 # =============================================================================
 # Optional Services - Uncomment if needed
 # =============================================================================
 
-  # PostgreSQL database (uncomment if needed)
-  # db:
-  #   image: postgres:15-alpine
-  #   ports:
-  #     - "5432:5432"
-  #   environment:
-  #     - POSTGRES_USER=module
-  #     - POSTGRES_PASSWORD=modulepass
-  #     - POSTGRES_DB=module_db
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U module"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
+# PostgreSQL database (uncomment if needed)
+# db:
+#   image: postgres:15-alpine
+#   ports:
+#     - "5432:5432"
+#   environment:
+#     - POSTGRES_USER=module
+#     - POSTGRES_PASSWORD=modulepass
+#     - POSTGRES_DB=module_db
+#   volumes:
+#     - postgres_data:/var/lib/postgresql/data
+#   healthcheck:
+#     test: ["CMD-SHELL", "pg_isready -U module"]
+#     interval: 10s
+#     timeout: 5s
+#     retries: 5
 
-  # Redis (uncomment if using Celery or caching)
-  # redis:
-  #   image: redis:7-alpine
-  #   ports:
-  #     - "6379:6379"
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "ping"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
+# Redis (uncomment if using Celery or caching)
+# redis:
+#   image: redis:7-alpine
+#   ports:
+#     - "6379:6379"
+#   healthcheck:
+#     test: ["CMD", "redis-cli", "ping"]
+#     interval: 10s
+#     timeout: 5s
+#     retries: 5
 
 # volumes:
 #   postgres_data:

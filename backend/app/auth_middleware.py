@@ -81,3 +81,4 @@ def get_current_tenant():
     """Get current tenant from Flask request context"""
     return getattr(g, 'tenant', None) or getattr(g, 'tenant_id', None)
 
+

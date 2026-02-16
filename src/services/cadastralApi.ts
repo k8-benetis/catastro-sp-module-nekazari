@@ -54,7 +54,7 @@ const getApiUrl = (): string => {
   if (typeof window !== 'undefined' && (window as any).__ENV__ && (window as any).__ENV__.API_URL) {
     return (window as any).__ENV__.API_URL;
   }
-  return 'https://nkz.artotxiki.com'; // Fallback
+  return 'https://nkz.robotika.cloud'; // Fallback
 };
 
 class CadastralApiService {
