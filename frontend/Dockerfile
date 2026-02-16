@@ -1,4 +1,12 @@
-# Multi-stage build for Catastro Spain Frontend
+# =============================================================================
+# Catastro Spain Module — Frontend IIFE Bundle Build
+# =============================================================================
+# Builds the module as a self-contained IIFE bundle (nkz-module.js).
+# In production, this is served as a static file from MinIO, not via nginx.
+# This Docker image is only used for backwards-compat CI/CD; the actual
+# deployment uploads dist/nkz-module.js directly to MinIO.
+# =============================================================================
+
 # Stage 1: Build with Vite
 FROM node:20-alpine AS builder
 
@@ -7,19 +15,13 @@ WORKDIR /app
 # Copy package files
 COPY package.json package-lock.json* ./
 
-# Temporarily update package.json to use npm SDK instead of local path
-RUN sed -i 's|"file:../nekazari-public/packages/sdk"|"^1.0.3"|g' package.json && \
-    sed -i 's|"@nekazari/sdk": "@nekazari/sdk@|"@nekazari/sdk": "|g' package.json && \
+# The SDK and UI-Kit are published on npm — install normally
+# Remove any file: references that may have crept in
+RUN sed -i '/"file:.*"/d' package.json && \
     rm -f package-lock.json && \
-    echo "=== Updated package.json ===" && \
-    grep "@nekazari/sdk" package.json && \
-    echo "=== Installing dependencies ===" && \
-    npm install --registry=https://registry.npmjs.org/ && \
-    echo "=== Verifying SDK installation ===" && \
-    npm list @nekazari/sdk 2>&1 && \
-    test -d node_modules/@nekazari/sdk && echo "✓ SDK directory exists" || (echo "ERROR: SDK directory not found" && exit 1)
+    npm install --registry=https://registry.npmjs.org/ 2>&1
 
-# Copy all necessary files for build
+# Copy source files needed for building
 COPY src/ ./src/
 COPY index.html ./
 COPY vite.config.ts ./
@@ -29,22 +31,17 @@ COPY tailwind.config.js ./
 COPY postcss.config.js ./
 COPY manifest.json ./
 
-# Build application
+# Build the IIFE bundle
 RUN npm run build
 
-# Stage 2: Serve with Nginx
+# Stage 2: Lightweight image with just the bundle
 FROM nginx:alpine
 
-# Copy built assets
-COPY --from=builder /app/dist /usr/share/nginx/html
+# Copy built bundle
+COPY --from=builder /app/dist /usr/share/nginx/html/modules/catastro-spain
 
-# Copy custom nginx config (with CORS and module path support)
+# Copy nginx config (serves the module bundle)
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Expose port
 EXPOSE 80
-
-# Start nginx
 CMD ["nginx", "-g", "daemon off;"]
-
-
