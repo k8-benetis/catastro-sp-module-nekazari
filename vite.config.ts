@@ -18,7 +18,7 @@ const NKZ_EXTERNALS: Record<string, string> = {
   'react': 'React',
   'react-dom': 'ReactDOM',
   'react-dom/client': 'ReactDOM',
-  // Removed explicit jsx-runtime mappings to prevent accidental global overrides
+  'react-router-dom': 'ReactRouterDOM',
   '@nekazari/sdk': '__NKZ_SDK__',
   '@nekazari/ui-kit': '__NKZ_UI__',
 };
