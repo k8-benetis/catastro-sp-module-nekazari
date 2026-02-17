@@ -1,4 +1,4 @@
-import type { ModuleViewerSlots } from '@nekazari/sdk';
+import App from './App'; // Use the full App component
 import { moduleSlots } from './slots/index';
 import pkg from '../package.json';
 
@@ -7,12 +7,14 @@ const MODULE_ID = 'catastro-spain';
 
 console.log(`[${MODULE_ID}] Initializing module v${pkg.version}`);
 
+
 // Self-register with the host runtime
 if (window.__NKZ__) {
+    // @ts-ignore - 'main' property is supported by host runtime but not yet in SDK type definition
     window.__NKZ__.register({
         id: MODULE_ID,
         viewerSlots: moduleSlots,
-        // potential future use: provider if not already handled in slots
+        main: App, // Register the App component
         version: pkg.version,
     });
 } else {
