@@ -18,8 +18,7 @@ const NKZ_EXTERNALS: Record<string, string> = {
   'react': 'React',
   'react-dom': 'ReactDOM',
   'react-dom/client': 'ReactDOM',
-  'react/jsx-runtime': 'React',
-  'react/jsx-dev-runtime': 'React',
+  // Removed explicit jsx-runtime mappings to prevent accidental global overrides
   '@nekazari/sdk': '__NKZ_SDK__',
   '@nekazari/ui-kit': '__NKZ_UI__',
 };
@@ -30,7 +29,12 @@ const NKZ_EXTERNALS: Record<string, string> = {
 
 export default defineConfig({
   plugins: [
-    react(),
+    // CRITICAL: Use 'classic' runtime to output React.createElement() calls.
+    // The 'automatic' runtime emits _jsx() which requires the jsx-runtime library.
+    // Since we externalize React to window.React (UMD), and UMD builds typically
+    // don't expose the jsx() function on the global object, we must use classic.
+    react({ jsxRuntime: 'classic' }),
+
     // Banner plugin to add module metadata comment
     {
       name: 'nkz-module-banner',
@@ -56,6 +60,7 @@ export default defineConfig({
   },
 
   server: {
+    host: '0.0.0.0',
     port: 5004,
     proxy: {
       '/api': {
