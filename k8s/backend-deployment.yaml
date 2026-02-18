@@ -32,7 +32,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: backend
-          image: ghcr.io/k8-benetis/catastro-sp-module-nekazari/catastro-spain-backend:latest
+          image: ghcr.io/k8-benetis/catastro-sp-module-nekazari/catastro-backend:latest
           imagePullPolicy: Always
           ports:
             - name: http
