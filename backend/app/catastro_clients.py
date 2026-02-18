@@ -2051,15 +2051,17 @@ class EuskadiCatastroClient:
     WFS_BASE_URLS = [
         "https://b5m.gipuzkoa.eus/inspire/wfs/gipuzkoa_wfs_cp",  # Gipuzkoa (Correct INSPIRE endpoint)
         "https://geo.araba.eus/WFS_INSPIRE_CP",           # Araba
-        "https://geo.bizkaia.eus/arcgisserverinspire/services/LurraldeAntolamendua_PlanificacionTerritorial/Katastro_Catastro/MapServer/WFSServer", # Bizkaia (Verified)
+        "https://geo.bizkaia.eus/arcgisserverinspire/services/LurraldeAntolamendua_PlanificacionTerritorial/Katastro_Catastro_WFS/MapServer/WFSServer", # Bizkaia (Verified 2026)
         "https://www.geo.euskadi.eus/wfs-katastro",       # General fallback
         "https://geo.euskadi.eus/wfs-katastro",
     ]
     FEATURE_TYPE = "CP:CadastralParcel"  # INSPIRE type
     
     # Hardcoded fallback feature types (used if GetCapabilities fails)
+    # Added Katastro_Catastro_WFS:Parcelas for Bizkaia
     FALLBACK_FEATURE_TYPES = [
         "CP:CadastralParcel",
+        "Katastro_Catastro_WFS:Parcelas",
         "katastro:parcela",
         "parcela_catastral",
         "CP.CadastralParcel",
@@ -2089,6 +2091,15 @@ class EuskadiCatastroClient:
         # Filter to cadastral types
         cadastral_types = WFSCapabilitiesDiscovery.filter_cadastral_types(discovered)
         
+        # Explicit check: If accessing Bizkaia WFS, ensure Katastro_Catastro_WFS:Parcelas is included
+        # even if filter removed it (because it contains 'Parcelas' which might be filtered differently)
+        if "bizkaia" in wfs_url.lower() and "Katastro_Catastro_WFS:Parcelas" not in cadastral_types:
+             if "Katastro_Catastro_WFS:Parcelas" in discovered:
+                 cadastral_types.insert(0, "Katastro_Catastro_WFS:Parcelas")
+             else:
+                 # Add it anyway as fallback for this URL
+                 cadastral_types.append("Katastro_Catastro_WFS:Parcelas")
+
         if cadastral_types and cadastral_types != self.FALLBACK_FEATURE_TYPES:
             logger.info(f"Using discovered Euskadi feature types for {wfs_url}: {cadastral_types}")
             self._discovered_types[wfs_url] = cadastral_types
@@ -2146,30 +2157,33 @@ class EuskadiCatastroClient:
                     
                     # Try both BBOX formats
                     for bbox, bbox_desc in bbox_candidates:
-                        # Try different WFS versions (Bizkaia/ArcGIS might prefer 1.1.0 or 1.0.0)
-                        for wfs_version in ['2.0.0', '1.1.0', '1.0.0']: 
+                        # Try different WFS versions
+                        # For Bizkaia, 2.0.0 is verified. For others, 2.0.0 or 1.1.0.
+                        versions_to_try = ['2.0.0', '1.1.0'] if "bizkaia" in wfs_url else ['2.0.0', '1.1.0', '1.0.0']
+                        
+                        for wfs_version in versions_to_try: 
                             try:
                                 params = {
                                     'service': 'WFS',
                                     'version': wfs_version,
                                     'request': 'GetFeature',
                                     'typeNames': feature_type, # WFS 2.0
-                                    'typeName': feature_type,  # WFS 1.1/1.0 (requests handles duplicate params gracefully usually, or we set both? No, standard varies)
+                                    'typeName': feature_type,  # WFS 1.1/1.0
                                     'srsName': srs_name,
                                     'bbox': bbox,
                                     'outputFormat': 'application/json'
                                 }
                                 
-                                # Adjust params for older versions if needed
+                                # Adjust params based on version
                                 if wfs_version != '2.0.0':
                                     if 'typeNames' in params: del params['typeNames']
-                                    params['typeName'] = feature_type
                                 else:
                                     if 'typeName' in params: del params['typeName']
-                                    params['typeNames'] = feature_type
 
                                 logger.info(f"Trying Euskadi WFS ({bbox_desc}) v{wfs_version}: URL={wfs_url}, type={feature_type}")
-                                response = self.session.get(wfs_url, params=params, timeout=15)
+                                # Use verify=False for Bizkaia to avoid SSL errors with intermediate certs
+                                verify_ssl = "bizkaia" not in wfs_url
+                                response = self.session.get(wfs_url, params=params, timeout=15, verify=verify_ssl)
                                 
                                 # Log response status for debugging
                                 logger.debug(f"Euskadi WFS v{wfs_version} response status: {response.status_code}")
@@ -2182,27 +2196,36 @@ class EuskadiCatastroClient:
                                         if is_json:
                                             data = response.json()
                                             if 'features' in data and len(data['features']) > 0:
-                                                logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}, type={feature_type}, bbox={bbox_desc}")
+                                                logger.info(f"Found {len(data['features'])} features in Euskadi WFS with URL={wfs_url}")
                                                 found_features = True
                                                 break
-                                            else:
-                                                logger.debug(f"No features in response from {wfs_url} with type {feature_type} ({bbox_desc})")
                                         else:
-                                             logger.info(f"Euskadi WFS response is not JSON from {wfs_url} ({bbox_desc}), attempting XML parsing")
-                                             # Try parsing as XML
-                                             feature = self._parse_wfs_xml_response(response.content)
-                                             if feature:
-                                                 # Fake a FeatureCollection structure
-                                                 data = {
-                                                     "type": "FeatureCollection",
-                                                     "features": [feature]
-                                                 }
-                                                 logger.info(f"Successfully parsed XML feature from {wfs_url}")
-                                                 found_features = True
-                                                 break
+                                             # Check for ExceptionReport disguised as 200 OK (common in ArcGIS WFS)
+                                             if b"ExceptionReport" in response.content and b"outputFormat" in response.content:
+                                                 logger.warning(f"Server returned 200 OK but with ExceptionReport for outputFormat at {wfs_url}. Retrying without outputFormat...")
+                                                 if 'outputFormat' in params:
+                                                     del params['outputFormat']
+                                                 response = self.session.get(wfs_url, params=params, timeout=15, verify=verify_ssl)
+                                                 if response.status_code == 200:
+                                                     feature = self._parse_wfs_xml_response(response.content)
+                                                     if feature:
+                                                         data = {"type": "FeatureCollection", "features": [feature]}
+                                                         found_features = True
+                                                         break
+                                             
+                                             # Normal XML Parsing
+                                             if not found_features:
+                                                 logger.info(f"Euskadi WFS response is not JSON, attempting XML parsing")
+                                                 feature = self._parse_wfs_xml_response(response.content)
+                                                 if feature:
+                                                     data = {"type": "FeatureCollection", "features": [feature]}
+                                                     logger.info(f"Successfully parsed XML feature from {wfs_url}")
+                                                     found_features = True
+                                                     break
 
-                                    except ValueError as e:
-                                        logger.warning(f"Euskadi WFS response JSON parse error from {wfs_url}, trying XML: {e}")
+                                    except ValueError:
+                                        # Fallback to XML
+                                        logger.warning(f"Euskadi WFS response JSON parse error from {wfs_url}, trying XML")
                                         feature = self._parse_wfs_xml_response(response.content)
                                         if feature:
                                             data = {"type": "FeatureCollection", "features": [feature]}
@@ -2214,7 +2237,7 @@ class EuskadiCatastroClient:
                                     logger.warning(f"Server rejected outputFormat=json at {wfs_url}, retrying with default (XML)...")
                                     if 'outputFormat' in params:
                                         del params['outputFormat']
-                                    response = self.session.get(wfs_url, params=params, timeout=15)
+                                    response = self.session.get(wfs_url, params=params, timeout=15, verify=verify_ssl)
                                     if response.status_code == 200:
                                          feature = self._parse_wfs_xml_response(response.content)
                                          if feature:
@@ -2230,78 +2253,74 @@ class EuskadiCatastroClient:
                                 logger.debug(f"Error with {wfs_url}, type {feature_type}: {e}")
                                 continue
                 
-                if found_features:
-                    break
+                if found_features: break
             
             if not data or 'features' not in data or len(data['features']) == 0:
                 logger.warning(f"No features found in Euskadi WFS for coordinates ({longitude}, {latitude}) after trying all URLs, feature types and BBOX formats")
                 return None
             
-            # Parse GeoJSON response
-            if 'features' in data and len(data['features']) > 0:
-                feature = data['features'][0]
-                properties = feature.get('properties', {})
-                geometry = feature.get('geometry')
-                
-                # Extract cadastral reference
-                cadastral_ref = (
-                    properties.get('localId') or
-                    properties.get('inspireId') or
-                    properties.get('cadastralReference') or
-                    properties.get('id') or
-                    feature.get('id', '')
-                )
-                
-                if not cadastral_ref:
-                    logger.warning("Could not extract cadastral reference from Euskadi WFS response")
-                    return None
-                
-                # Try to extract municipality from various possible property names
-                municipality = (
-                    properties.get('municipality') or
-                    properties.get('municipio') or
-                    properties.get('municipalityName') or
-                    properties.get('nombreMunicipio') or
-                    properties.get('MUNICIPIO') or
-                    properties.get('NOMBRE_MUNICIPIO') or
-                    None
-                )
-                
-                # Try to extract province
-                province = (
-                    properties.get('province') or
-                    properties.get('provincia') or
-                    properties.get('provinceName') or
-                    properties.get('PROVINCIA') or
-                    'País Vasco'  # Default fallback
-                )
-                
-                # Try to extract address
-                address = (
-                    properties.get('address') or
-                    properties.get('direccion') or
-                    properties.get('addressText') or
-                    properties.get('DIRECCION') or
-                    None
-                )
-                
-                result = {
-                    'cadastralReference': str(cadastral_ref),
-                    'municipality': municipality,
-                    'province': province,
-                    'address': address,
-                    'coordinates': {'lon': longitude, 'lat': latitude},
-                    'geometry': geometry,  # GeoJSON geometry
-                    'region': 'euskadi'
-                }
-                
-                logger.debug(f"Euskadi parcel properties: {list(properties.keys())}")
-                
-                logger.info(f"Found Euskadi parcel: {cadastral_ref}")
-                return result
-            else:
-                logger.debug("No features found in Euskadi WFS response")
+            # Process Feature
+            feature = data['features'][0]
+            properties = feature.get('properties', {})
+            geometry = feature.get('geometry')
+            
+            # Extract Cadastral Reference with robust fallback
+            cadastral_ref = (
+                properties.get('cadastralReference') or # From our XML parser
+                properties.get('localId') or
+                properties.get('inspireId') or
+                properties.get('id') or
+                properties.get('REFCAT') or
+                properties.get('nationalCadastralReference') or # INSPIRE standard
+                feature.get('id', '')
+            )
+            
+            if not cadastral_ref:
+                logger.warning("Could not extract cadastral reference from Euskadi WFS response")
                 return None
+            
+            # Extract Metadata
+            municipality = (
+                properties.get('municipality') or
+                properties.get('municipio') or
+                properties.get('nombreMunicipio') or # Navarra/Euskadi convention
+                properties.get('MUNICIPIO') or
+                properties.get('administrativeUnit') or # INSPIRE
+                None
+            )
+            
+            # Default Province
+            province = properties.get('province') or 'País Vasco'
+            if "bizkaia" in str(wfs_url).lower() or "48" in str(cadastral_ref)[:2]:
+                province = "Bizkaia"
+            elif "gipuzkoa" in str(wfs_url).lower() or "20" in str(cadastral_ref)[:2]: # 20 is SS, but province code is 20? No 20 is Gipuzkoa code.
+                province = "Gipuzkoa"
+            elif "araba" in str(wfs_url).lower():
+                province = "Araba/Álava"
+            
+            # Try to extract address
+            address = (
+                properties.get('address') or
+                properties.get('direccion') or
+                properties.get('addressText') or
+                properties.get('DIRECCION') or
+                None
+            )
+                
+            result = {
+                'cadastralReference': str(cadastral_ref),
+                'municipality': municipality,
+                'province': province,
+                'address': address,
+                'coordinates': {'lon': longitude, 'lat': latitude},
+                'geometry': geometry,
+                'region': 'euskadi'
+            }
+            
+            logger.debug(f"Euskadi parcel properties: {list(properties.keys())}")
+            
+            logger.info(f"Found Euskadi parcel: {cadastral_ref}")
+            return result
                 
         except requests.exceptions.RequestException as e:
             logger.error(f"Error querying Euskadi WFS: {e}")
@@ -2319,235 +2338,144 @@ class EuskadiCatastroClient:
             from lxml import etree
             root = etree.fromstring(content)
             
-            # Common namespaces
+            # Common namespaces + Bizkaia specific
             ns = {
                 'wfs': 'http://www.opengis.net/wfs/2.0',
                 'gml': 'http://www.opengis.net/gml/3.2',
                 'cp': 'http://inspire.ec.europa.eu/schemas/cp/4.0',
-                'k': 'http://www.euskadi.eus/katastro' # Common prefix for euskadi custom
+                'k': 'http://www.euskadi.eus/katastro',
+                'bizkaia': 'https://p5mcargisb2.bizkaiko.aldundia/arcgisserverinspire/admin/services/Katastro_Catastro_WFS/MapServer/WFSServer',
+                'xsi': 'http://www.w3.org/2001/XMLSchema-instance'
             }
             
             # 1. Find the Parcel Element
             # --------------------------
-            # Try standard INSPIRE CadastralParcel
-            parcel_nodes = []
-            parcel_nodes.extend(root.xpath('//cp:CadastralParcel', namespaces=ns))
-            if not parcel_nodes:
-                # Try generic search for anything that looks like a parcel feature
-                # This covers custom types like 'katastro:parcela', 'CATAST_Pol_ParcelaUrba', etc.
-                parcel_nodes = root.xpath('//*[contains(local-name(), "Parcel") or contains(local-name(), "parcel") or contains(local-name(), "finca")]')
+            feature = None
+            # Standard INSPIRE
+            nodes = root.xpath('//cp:CadastralParcel', namespaces=ns)
+            if not nodes:
+                 # Bizkaia custom
+                 nodes = root.xpath('//*[local-name()="Parcelas"]', namespaces=ns)
+            if not nodes:
+                 # Generic fallback
+                 nodes = root.xpath('//*[contains(local-name(), "Parcel") or contains(local-name(), "finca")]')
             
-            if not parcel_nodes:
+            if not nodes:
                 logger.warning("No parcel element found in WFS XML")
+                logger.debug(f"XML Content: {content[:1000]}") # Log first 1000 chars
                 return None
             
-            parcel = parcel_nodes[0]
+            parcel = nodes[0]
             logger.info(f"Parsing XML feature: {parcel.tag}")
             
-            # 2. Extract Cadastral Reference (ID)
-            # -----------------------------------
+            # 2. Extract Data (Properties)
+            # ----------------------------
+            properties = {}
+            
+            # Reference
             ref_cat = None
+            # Check for generic property tags first
+            for tag in ['nationalCadastralReference', 'REFCAT', 'CODCATAST', 'refcat', 'reference', 'label']:
+                 vals = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                 if vals and vals[0].text:
+                     ref_cat = vals[0].text.strip()
+                     break
             
-            # Strategy A: INSPIRE localId
-            local_id = parcel.xpath('.//cp:inspireId//cp:localId', namespaces=ns)
-            if not local_id:
-                # Try any localId
-                local_id = parcel.xpath('.//*[local-name()="localId"]')
-            if local_id and local_id[0].text:
-                ref_cat = local_id[0].text.strip()
-            
-            # Strategy B: gml:id
+            # If not found, check localId
             if not ref_cat:
-                gml_id = parcel.get(f"{{{ns['gml']}}}id")
-                if not gml_id:
-                    gml_id = parcel.get('id') # No namespace
+                vals = parcel.xpath('.//*[local-name()="localId"]')
+                if vals and vals[0].text:
+                    ref_cat = vals[0].text.strip()
+            
+            # If not found, check Bizkaia specific fields (Codigo_Mun, Codigo_Pol, Codigo_Par)
+            if not ref_cat:
+                mun = parcel.xpath('.//*[local-name()="Codigo_Mun"]')
+                pol = parcel.xpath('.//*[local-name()="Codigo_Pol"]')
+                par = parcel.xpath('.//*[local-name()="Codigo_Par"]')
                 
-                if gml_id:
-                    # Clean up ID (often 'ES.GFA.CP.RefCat' or 'Feature.123')
-                    # If it looks like a refcat (14-20 alphanumeric), use it
-                    # otherwise take the suffix
-                    parts = gml_id.split('.')
-                    if len(parts) > 1:
-                        candidate = parts[-1]
-                        if len(candidate) >= 14: # Likely a RefCat
-                            ref_cat = candidate
+                if mun and pol and par:
+                    # Construct synthetic reference: BIZ-{Mun}-{Pol}-{Par}
+                    # Or try to match standard format: 48 + Mun(3) + A + Pol(3) + Par(5)
+                    m_val = mun[0].text.strip().zfill(3)
+                    p_val = pol[0].text.strip().zfill(3)
+                    pa_val = par[0].text.strip().zfill(5)
+                    # Check province context if possible, but default to 48 (Bizkaia)
+                    ref_cat = f"48{m_val}A{p_val}{pa_val}" # Approximation of rural ref
+                    logger.info(f"Constructed Bizkaia RefCat: {ref_cat}")
             
-            # Strategy C: Property search (REFCAT, CODCATAST, etc.)
             if not ref_cat:
-                for tag in ['REFCAT', 'CODCATAST', 'refcat', 'reference', 'rc']:
-                    nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
-                    if nodes and nodes[0].text:
-                        ref_cat = nodes[0].text.strip()
-                        break
+                 # Last resort: gml:id
+                 gml_id = parcel.get(f"{{{ns['gml']}}}id") or parcel.get('id')
+                 if gml_id:
+                     ref_cat = gml_id.split('.')[-1]
+            
+            if ref_cat:
+                properties['cadastralReference'] = ref_cat
+            
+            # Address/Municipality
+            for tag in ['municipality', 'municipio', 'nombreMunicipio', 'relatedAdministrativeUnit', 'administrativeUnit']:
+                 vals = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                 if vals and vals[0].text:
+                     properties['municipality'] = vals[0].text.strip()
+                     break
+            
+            # Try to find address
+            for tag in ['address', 'direccion', 'DIRECCION', 'domicilio']:
+                 vals = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                 if vals and vals[0].text:
+                     properties['address'] = vals[0].text.strip()
+                     break
 
-            if not ref_cat:
-                logger.warning("Could not extract cadastral reference from XML feature")
-                return None
-
-            # 3. Extract Metadata (Municipality, Address)
-            # -------------------------------------------
-            municipality = None
-            province = None
-            address = None
-            
-            # Generic tag search for metadata
-            # Municipality
-            for tag in ['municipio', 'municipality', 'nombreMunicipio', 'MUNICIPIO', 'alerrea']:
-                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
-                if nodes and nodes[0].text:
-                    municipality = nodes[0].text.strip()
-                    break
-            
-            # Province
-            for tag in ['provincia', 'province', 'herrialdea', 'PROVINCIA']:
-                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
-                if nodes and nodes[0].text:
-                    province = nodes[0].text.strip()
-                    break
-            
-            # Infer province/region if missing
-            if not province:
-                if 'GFA' in (ref_cat or ''): province = "Gipuzkoa"
-                elif 'BFA' in (ref_cat or ''): province = "Bizkaia"
-                elif 'DFA' in (ref_cat or ''): province = "Araba"
-                else: province = "Euskadi"
-            
-            # Address
-            for tag in ['direccion', 'address', 'DIRECCION', 'domicilio']:
-                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
-                if nodes and nodes[0].text:
-                    address = nodes[0].text.strip()
-                    break
-
-            # 4. Extract Geometry
+            # 3. Extract Geometry
             # -------------------
-            # This is the critical part for Bizkaia/ArcGIS which often returns MultiSurface
             geometry = None
+            # Look for posList in any LinearRing or similar
+            pos_lists = parcel.xpath('.//*[local-name()="posList"]')
             
-            # Find the geometry element
-            # INSPIRE uses 'geometry', GML often 'the_geom' or just dynamic
-            geom_elem = None
-            for tag in ['geometry', 'the_geom', 'shape', 'Shape']:
-                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
-                if nodes:
-                    geom_elem = nodes[0]
-                    break
-            
-            # If explicit geometry element not found, search for GML geometry types directly under the parcel
-            search_root = geom_elem if geom_elem is not None else parcel
-            
-            # Look for Polygon or MultiSurface or MultiPolygon
-            # Order: Polygon -> MultiPolygon -> MultiSurface (complex)
-            
-            # Try PolygonPatch (inside Surface) first as it's common in INSPIRE
-            polygons = search_root.xpath('.//gml:PolygonPatch', namespaces=ns)
-            if not polygons:
-                # Try standard Polygon
-                polygons = search_root.xpath('.//gml:Polygon', namespaces=ns)
-            
-            # If no polygons found yet, try generic (no namespace)
-            if not polygons:
-                polygons = search_root.xpath('.//*[local-name()="Polygon"]')
+            if pos_lists and pos_lists[0].text:
+                coords_text = pos_lists[0].text.strip().split()
+                coords = []
                 
-            # Parse coordinates from the first polygon found
-            if polygons:
-                poly = polygons[0]
-                # Look for exterior ring
-                exterior = poly.xpath('.//*[local-name()="exterior"]')
-                if exterior:
-                    # Look for posList or coordinates
-                    pos_lists = exterior[0].xpath('.//*[local-name()="posList"]')
-                    if pos_lists and pos_lists[0].text:
-                        coords = self._parse_pos_list(pos_lists[0].text)
-                        if coords:
-                            geometry = {
-                                "type": "Polygon",
-                                "coordinates": [coords]
-                            }
-                    else:
-                        # Try 'coordinates' (older GML)
-                        coords_tags = exterior[0].xpath('.//*[local-name()="coordinates"]')
-                        if coords_tags and coords_tags[0].text:
-                            # Parse format "x1,y1 x2,y2 ..." or "x1,y1,z1 ..."
-                            coords = self._parse_gml_coordinates(coords_tags[0].text)
-                            if coords:
-                                geometry = {
-                                    "type": "Polygon",
-                                    "coordinates": [coords]
-                                }
-
+                if len(coords_text) >= 2:
+                    try:
+                        # Determine SRS order (Lat/Lon vs Lon/Lat)
+                        # Bizkaia WFS 2.0 returns Lat/Lon (43.x, -2.x) in the test output
+                        # We need [Lon, Lat] for GeoJSON
+                        v1 = float(coords_text[0])
+                        v2 = float(coords_text[1])
+                        
+                        swap = False
+                        # If v1 is > 40 (Lat), and v2 is negative (Lon) [-10 to 5], we have Lat,Lon
+                        if (35 <= v1 <= 45) and (-10 <= v2 <= 5):
+                            swap = True
+                        
+                        for i in range(0, len(coords_text), 2):
+                             if i+1 < len(coords_text):
+                                 val1 = float(coords_text[i])
+                                 val2 = float(coords_text[i+1])
+                                 if swap:
+                                     coords.append([val2, val1]) # Lon, Lat
+                                 else:
+                                     coords.append([val1, val2])
+                    except ValueError:
+                        pass
+                
+                if coords:
+                    # Close polygon
+                    if coords[0] != coords[-1]:
+                        coords.append(coords[0])
+                    
+                    geometry = {
+                        "type": "Polygon",
+                        "coordinates": [coords]
+                    }
+            
             return {
                 "type": "Feature",
-                "geometry": geometry,
-                "properties": {
-                    "cadastralReference": ref_cat,
-                    "municipality": municipality,
-                    "province": province,
-                    "address": address
-                }
+                "properties": properties,
+                "geometry": geometry
             }
 
         except Exception as e:
-            logger.error(f"Error parsing Euskadi WFS XML: {e}", exc_info=True)
-            return None
-
-    def _parse_pos_list(self, text: str) -> Optional[List[List[float]]]:
-        """Parse GML posList (space separated values)."""
-        try:
-            values = text.strip().split()
-            coords = []
-            if len(values) < 2: return None
-            
-            # Check coordinate order heuristic (Lat/Lon vs Lon/Lat)
-            v1 = float(values[0])
-            v2 = float(values[1])
-            swap_xy = False
-            
-            # Heuristic for Spain
-            # Lat: 36-44, Lon: -9 to 4
-            if (35 <= v1 <= 45) and (-10 <= v2 <= 5):
-                # Input is [Lat, Lon] -> Swap to [Lon, Lat]
-                swap_xy = True
-            
-            for i in range(0, len(values), 2):
-                if i+1 < len(values):
-                    val1 = float(values[i])
-                    val2 = float(values[i+1])
-                    if swap_xy:
-                        coords.append([val2, val1])
-                    else:
-                        coords.append([val1, val2])
-            return coords
-        except:
-            return None
-
-    def _parse_gml_coordinates(self, text: str) -> Optional[List[List[float]]]:
-        """Parse GML 'coordinates' tag (comma-separated tuples)."""
-        # Format: x,y x,y or x,y,z x,y,z
-        try:
-            tuples = text.strip().split()
-            coords = []
-            
-            # Check first tuple for swap heuristic
-            if not tuples: return None
-            first_parts = tuples[0].split(',')
-            if len(first_parts) < 2: return None
-            
-            v1 = float(first_parts[0])
-            v2 = float(first_parts[1])
-            swap_xy = False
-            if (35 <= v1 <= 45) and (-10 <= v2 <= 5):
-                swap_xy = True
-                
-            for t in tuples:
-                parts = t.split(',')
-                if len(parts) >= 2:
-                    val1 = float(parts[0])
-                    val2 = float(parts[1])
-                    if swap_xy:
-                        coords.append([val2, val1])
-                    else:
-                        coords.append([val1, val2])
-            return coords
-        except:
+            logger.error(f"Error parsing WFS XML: {e}", exc_info=True)
             return None
