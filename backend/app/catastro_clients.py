@@ -1913,6 +1913,133 @@ class NavarraCatastroClient:
             logger.error(f"Unexpected error querying Navarra cadastre: {e}", exc_info=True)
             return None
 
+    def _parse_wfs_xml_response(self, content: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Parse WFS GML/XML response when JSON is not available (Fallback for Navarra).
+        """
+        try:
+            from lxml import etree
+            root = etree.fromstring(content)
+            
+            # Common namespaces
+            ns = {
+                'wfs': 'http://www.opengis.net/wfs/2.0',
+                'gml': 'http://www.opengis.net/gml/3.2',
+                'cp': 'http://inspire.ec.europa.eu/schemas/cp/4.0',
+                'ms': 'http://mapserver.gis.umn.edu/mapserver' # IDENA specific often uses 'ms'
+            }
+            
+            # Find feature members
+            # Try standard WFS/GML first
+            features = []
+            features.extend(root.xpath('//wfs:member', namespaces=ns))
+            features.extend(root.xpath('//gml:featureMember', namespaces=ns))
+            features.extend(root.xpath('//featureMember')) # No namespace
+            
+            if not features:
+                # Try finding any element that looks like a parcel
+                features = root.xpath('//*[local-name()="CadastralParcel"]')
+                if not features:
+                    features = root.xpath('//*[local-name()="CATAST_Pol_ParcelaUrba"]')
+                if not features:
+                    features = root.xpath('//*[local-name()="CATAST_Pol_ParcelaRusti"]')
+            
+            if not features:
+                return None
+            
+            feature = features[0]
+            
+            # If feature is a wrapper (member), extract the actual content
+            if feature.tag.endswith('member') or feature.tag.endswith('featureMember'):
+                if len(feature) > 0:
+                    feature = feature[0]
+            
+            # Extract ID/Reference
+            ref_cat = None
+            # IDENA often puts it in 'localId' or 'REFCAT' or 'id' property
+            for path in ['.//*[local-name()="localId"]', './/*[local-name()="REFCAT"]', './/*[local-name()="id"]']:
+                nodes = feature.xpath(path)
+                if nodes and nodes[0].text:
+                    ref_cat = nodes[0].text
+                    break
+            
+            if not ref_cat:
+                # Try gml:id
+                gml_id = feature.get(f"{{{ns['gml']}}}id")
+                if gml_id:
+                    ref_cat = gml_id.split('.')[-1] if '.' in gml_id else gml_id
+            
+            if not ref_cat:
+                return None
+
+            # Extract Metadata
+            municipality = None
+            for tag in ['municipio', 'municipality', 'nombreMunicipio', 'MUNICIPIO']:
+                nodes = feature.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes and nodes[0].text:
+                    municipality = nodes[0].text
+                    break
+            
+            address = None
+            for tag in ['direccion', 'address', 'DIRECCION', 'clase']:
+                nodes = feature.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes and nodes[0].text:
+                    address = nodes[0].text
+                    break
+            
+            # Extract Geometry (Basic GML Polygon support)
+            geometry = None
+            # Look for posList in LinearRing
+            pos_lists = feature.xpath('.//*[local-name()="items"] | .//*[local-name()="posList"]')
+            
+            if pos_lists and pos_lists[0].text:
+                coords_text = pos_lists[0].text.strip().split()
+                coords = []
+                
+                # Simple parsing, assuming standard GML 2D
+                if len(coords_text) >= 2:
+                    try:
+                        # Heuristic for Lat/Lon swap (same as Euskadi)
+                        v1 = float(coords_text[0])
+                        v2 = float(coords_text[1])
+                        swap_xy = False
+                        # Navarra is usually ETRS89 (approx Lat 42, Lon -1.6)
+                        # If v1 is > 40, likely Lat. If v1 is small neg, likely Lon.
+                        if (40 <= v1 <= 44) and (-3 <= v2 <= 0):
+                            swap_xy = True # Input is [Lat, Lon], we want [Lon, Lat]
+                        
+                        for i in range(0, len(coords_text), 2):
+                            if i+1 < len(coords_text):
+                                val1 = float(coords_text[i])
+                                val2 = float(coords_text[i+1])
+                                if swap_xy:
+                                    coords.append([val2, val1])
+                                else:
+                                    coords.append([val1, val2])
+                    except ValueError:
+                        pass
+                
+                if coords:
+                    geometry = {
+                        "type": "Polygon",
+                        "coordinates": [coords]
+                    }
+
+            return {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": {
+                    "cadastralReference": ref_cat,
+                    "municipality": municipality,
+                    "province": "Navarra",
+                    "address": address
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Error parsing Navarra WFS XML: {e}")
+            return None
+
 
 class EuskadiCatastroClient:
     """
@@ -2186,159 +2313,241 @@ class EuskadiCatastroClient:
     def _parse_wfs_xml_response(self, content: bytes) -> Optional[Dict[str, Any]]:
         """
         Parse WFS GML/XML response when JSON is not available.
-        Extracts the first parcel found.
+        Robust implementation using lxml and handling various GML structures (Gipuzkoa, Bizkaia, etc.).
         """
         try:
             from lxml import etree
             root = etree.fromstring(content)
             
-            # namespaces
+            # Common namespaces
             ns = {
                 'wfs': 'http://www.opengis.net/wfs/2.0',
                 'gml': 'http://www.opengis.net/gml/3.2',
-                'cp': 'http://inspire.ec.europa.eu/schemas/cp/4.0'
+                'cp': 'http://inspire.ec.europa.eu/schemas/cp/4.0',
+                'k': 'http://www.euskadi.eus/katastro' # Common prefix for euskadi custom
             }
             
-            # Find member/CadastralParcel
-            # Use local-name() to be safe against namespace variations
-            parcel = root.xpath('//cp:CadastralParcel', namespaces=ns)
-            if not parcel:
-                # Try without prefix filtering if needed, or check bounds
-                parcel = root.xpath('//*[local-name()="CadastralParcel"]')
-                
-            if not parcel:
-                return None
-                
-            parcel = parcel[0]
+            # 1. Find the Parcel Element
+            # --------------------------
+            # Try standard INSPIRE CadastralParcel
+            parcel_nodes = []
+            parcel_nodes.extend(root.xpath('//cp:CadastralParcel', namespaces=ns))
+            if not parcel_nodes:
+                # Try generic search for anything that looks like a parcel feature
+                # This covers custom types like 'katastro:parcela', 'CATAST_Pol_ParcelaUrba', etc.
+                parcel_nodes = root.xpath('//*[contains(local-name(), "Parcel") or contains(local-name(), "parcel") or contains(local-name(), "finca")]')
             
-            # Extract Reference
+            if not parcel_nodes:
+                logger.warning("No parcel element found in WFS XML")
+                return None
+            
+            parcel = parcel_nodes[0]
+            logger.info(f"Parsing XML feature: {parcel.tag}")
+            
+            # 2. Extract Cadastral Reference (ID)
+            # -----------------------------------
             ref_cat = None
-            # Standard INSPIRE: inspireId/Identifier/localId
+            
+            # Strategy A: INSPIRE localId
             local_id = parcel.xpath('.//cp:inspireId//cp:localId', namespaces=ns)
             if not local_id:
-                 local_id = parcel.xpath('.//*[local-name()="localId"]')
-            
+                # Try any localId
+                local_id = parcel.xpath('.//*[local-name()="localId"]')
             if local_id and local_id[0].text:
-                ref_cat = local_id[0].text
-            else:
-                # Fallback to gml:id
+                ref_cat = local_id[0].text.strip()
+            
+            # Strategy B: gml:id
+            if not ref_cat:
                 gml_id = parcel.get(f"{{{ns['gml']}}}id")
+                if not gml_id:
+                    gml_id = parcel.get('id') # No namespace
+                
                 if gml_id:
-                    # Often format is ES.GFA.CP.RefCat
-                     parts = gml_id.split('.')
-                     if len(parts) > 3:
-                         ref_cat = parts[-1] 
-                     else:
-                         ref_cat = gml_id
+                    # Clean up ID (often 'ES.GFA.CP.RefCat' or 'Feature.123')
+                    # If it looks like a refcat (14-20 alphanumeric), use it
+                    # otherwise take the suffix
+                    parts = gml_id.split('.')
+                    if len(parts) > 1:
+                        candidate = parts[-1]
+                        if len(candidate) >= 14: # Likely a RefCat
+                            ref_cat = candidate
+            
+            # Strategy C: Property search (REFCAT, CODCATAST, etc.)
+            if not ref_cat:
+                for tag in ['REFCAT', 'CODCATAST', 'refcat', 'reference', 'rc']:
+                    nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                    if nodes and nodes[0].text:
+                        ref_cat = nodes[0].text.strip()
+                        break
 
-            # Extract Metadata (Address, Municipality)
+            if not ref_cat:
+                logger.warning("Could not extract cadastral reference from XML feature")
+                return None
+
+            # 3. Extract Metadata (Municipality, Address)
+            # -------------------------------------------
             municipality = None
             province = None
             address = None
             
-            # Try INSPIRE Address format or national extensions
-            # Look for th:ThoroughfareName, ad:AddressAreaName, etc. (names vary by schema version)
-            # Simplistic approach: look for any text fields in <cp:location> or similar
+            # Generic tag search for metadata
+            # Municipality
+            for tag in ['municipio', 'municipality', 'nombreMunicipio', 'MUNICIPIO', 'alerrea']:
+                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes and nodes[0].text:
+                    municipality = nodes[0].text.strip()
+                    break
             
-            # Try to find CadastralZoning reference which often contains municipality info
-            zoning = parcel.xpath('.//cp:zoning', namespaces=ns)
-            if zoning:
-                # zoning text might look like "ES.GIPUZKOA.MUNICIPIO.014..."
-                # Extracting readable name is hard from codes without a lookup table.
-                pass
+            # Province
+            for tag in ['provincia', 'province', 'herrialdea', 'PROVINCIA']:
+                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes and nodes[0].text:
+                    province = nodes[0].text.strip()
+                    break
+            
+            # Infer province/region if missing
+            if not province:
+                if 'GFA' in (ref_cat or ''): province = "Gipuzkoa"
+                elif 'BFA' in (ref_cat or ''): province = "Bizkaia"
+                elif 'DFA' in (ref_cat or ''): province = "Araba"
+                else: province = "Euskadi"
+            
+            # Address
+            for tag in ['direccion', 'address', 'DIRECCION', 'domicilio']:
+                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes and nodes[0].text:
+                    address = nodes[0].text.strip()
+                    break
 
-            # Fallback: Navarra/Gipuzkoa specific properties if present (non-standard GML)
-            # Searching for common tag names regardless of namespace
-            for tag in ['municipio', 'municipality', 'nombreMunicipio', 'alerrea']:
-                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
-                if nodes and nodes[0].text:
-                    municipality = nodes[0].text
-                    break
-            
-            for tag in ['provincia', 'province', 'herrialdea']:
-                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
-                if nodes and nodes[0].text:
-                    province = nodes[0].text
-                    break
-            
-            # Extract Geometry (Polygon)
+            # 4. Extract Geometry
+            # -------------------
+            # This is the critical part for Bizkaia/ArcGIS which often returns MultiSurface
             geometry = None
-            # Find posList
-            pos_lists = parcel.xpath('.//gml:posList', namespaces=ns)
-            if pos_lists and pos_lists[0].text:
-                coords_text = pos_lists[0].text.strip().split()
-                # Parse standard GML posList
+            
+            # Find the geometry element
+            # INSPIRE uses 'geometry', GML often 'the_geom' or just dynamic
+            geom_elem = None
+            for tag in ['geometry', 'the_geom', 'shape', 'Shape']:
+                nodes = parcel.xpath(f'.//*[local-name()="{tag}"]')
+                if nodes:
+                    geom_elem = nodes[0]
+                    break
+            
+            # If explicit geometry element not found, search for GML geometry types directly under the parcel
+            search_root = geom_elem if geom_elem is not None else parcel
+            
+            # Look for Polygon or MultiSurface or MultiPolygon
+            # Order: Polygon -> MultiPolygon -> MultiSurface (complex)
+            
+            # Try PolygonPatch (inside Surface) first as it's common in INSPIRE
+            polygons = search_root.xpath('.//gml:PolygonPatch', namespaces=ns)
+            if not polygons:
+                # Try standard Polygon
+                polygons = search_root.xpath('.//gml:Polygon', namespaces=ns)
+            
+            # If no polygons found yet, try generic (no namespace)
+            if not polygons:
+                polygons = search_root.xpath('.//*[local-name()="Polygon"]')
                 
-                coords = []
-                # Smart Coordinate Ordering Heuristic
-                # Check sample point (first pair)
-                if len(coords_text) >= 2:
-                    try:
-                        v1 = float(coords_text[0])
-                        v2 = float(coords_text[1])
-                        
-                        # Heuristic for Spain/Euskadi Lat/Lon (approx)
-                        # Lat: 35 to 45
-                        # Lon: -10 to 5
-                        
-                        swap_xy = True # Default assumption (GML often Lat Lon)
-                        
-                        if (35 <= v1 <= 45) and (-10 <= v2 <= 5):
-                            # v1 is Lat, v2 is Lon. We need [Lon, Lat] for GeoJSON
-                            # So swap is True ([v2, v1])
-                            swap_xy = True
-                            logger.info(f"Detected Lat-Lon order in GML ({v1}, {v2}), swapping for GeoJSON")
-                        elif (35 <= v2 <= 45) and (-10 <= v1 <= 5):
-                            # v1 is Lon, v2 is Lat. We need [Lon, Lat]
-                            # So swap is False ([v1, v2])
-                            swap_xy = False
-                            logger.info(f"Detected Lon-Lat order in GML ({v1}, {v2}), using as-is")
-                        else:
-                            # If numbers are huge, it's UTM. We can't handle UTM here without pyproj transform context
-                            # But usually WFS returns what we asked (4326). If it returns UTM, we might be stuck.
-                            # Assuming standard GML default (Lat Lon)
-                            pass
-
-                        for i in range(0, len(coords_text), 2):
-                            if i+1 < len(coords_text):
-                                val1 = float(coords_text[i])
-                                val2 = float(coords_text[i+1])
-                                if swap_xy:
-                                    coords.append([val2, val1]) 
-                                else:
-                                    coords.append([val1, val2])
-                    except ValueError:
-                        pass
-                            
-                if coords:
-                    geometry = {
-                        "type": "Polygon",
-                        "coordinates": [coords] # Polygon expects ring inside outer array
-                    }
-            
-            # Extract Area (already there)
-            
-            # Extract Area
-            area = 0.0
-            area_elem = parcel.xpath('.//cp:areaValue', namespaces=ns)
-            if area_elem and area_elem[0].text:
-                try:
-                    area = float(area_elem[0].text) / 10000.0 # m2 to hectares
-                except:
-                    pass
+            # Parse coordinates from the first polygon found
+            if polygons:
+                poly = polygons[0]
+                # Look for exterior ring
+                exterior = poly.xpath('.//*[local-name()="exterior"]')
+                if exterior:
+                    # Look for posList or coordinates
+                    pos_lists = exterior[0].xpath('.//*[local-name()="posList"]')
+                    if pos_lists and pos_lists[0].text:
+                        coords = self._parse_pos_list(pos_lists[0].text)
+                        if coords:
+                            geometry = {
+                                "type": "Polygon",
+                                "coordinates": [coords]
+                            }
+                    else:
+                        # Try 'coordinates' (older GML)
+                        coords_tags = exterior[0].xpath('.//*[local-name()="coordinates"]')
+                        if coords_tags and coords_tags[0].text:
+                            # Parse format "x1,y1 x2,y2 ..." or "x1,y1,z1 ..."
+                            coords = self._parse_gml_coordinates(coords_tags[0].text)
+                            if coords:
+                                geometry = {
+                                    "type": "Polygon",
+                                    "coordinates": [coords]
+                                }
 
             return {
                 "type": "Feature",
                 "geometry": geometry,
                 "properties": {
                     "cadastralReference": ref_cat,
-                    "area": area,
                     "municipality": municipality,
-                    "province": province or ("Gipuzkoa" if "GFA" in (ref_cat or "") else "Euskadi"),
+                    "province": province,
                     "address": address
                 }
             }
 
         except Exception as e:
-            logger.error(f"Error parsing Euskadi WFS XML: {e}")
+            logger.error(f"Error parsing Euskadi WFS XML: {e}", exc_info=True)
+            return None
+
+    def _parse_pos_list(self, text: str) -> Optional[List[List[float]]]:
+        """Parse GML posList (space separated values)."""
+        try:
+            values = text.strip().split()
+            coords = []
+            if len(values) < 2: return None
+            
+            # Check coordinate order heuristic (Lat/Lon vs Lon/Lat)
+            v1 = float(values[0])
+            v2 = float(values[1])
+            swap_xy = False
+            
+            # Heuristic for Spain
+            # Lat: 36-44, Lon: -9 to 4
+            if (35 <= v1 <= 45) and (-10 <= v2 <= 5):
+                # Input is [Lat, Lon] -> Swap to [Lon, Lat]
+                swap_xy = True
+            
+            for i in range(0, len(values), 2):
+                if i+1 < len(values):
+                    val1 = float(values[i])
+                    val2 = float(values[i+1])
+                    if swap_xy:
+                        coords.append([val2, val1])
+                    else:
+                        coords.append([val1, val2])
+            return coords
+        except:
+            return None
+
+    def _parse_gml_coordinates(self, text: str) -> Optional[List[List[float]]]:
+        """Parse GML 'coordinates' tag (comma-separated tuples)."""
+        # Format: x,y x,y or x,y,z x,y,z
+        try:
+            tuples = text.strip().split()
+            coords = []
+            
+            # Check first tuple for swap heuristic
+            if not tuples: return None
+            first_parts = tuples[0].split(',')
+            if len(first_parts) < 2: return None
+            
+            v1 = float(first_parts[0])
+            v2 = float(first_parts[1])
+            swap_xy = False
+            if (35 <= v1 <= 45) and (-10 <= v2 <= 5):
+                swap_xy = True
+                
+            for t in tuples:
+                parts = t.split(',')
+                if len(parts) >= 2:
+                    val1 = float(parts[0])
+                    val2 = float(parts[1])
+                    if swap_xy:
+                        coords.append([val2, val1])
+                    else:
+                        coords.append([val1, val2])
+            return coords
+        except:
             return None

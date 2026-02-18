@@ -7,6 +7,7 @@ export interface CadastralData {
   address: string;
   coordinates: { lon: number; lat: number };
   region: 'spain' | 'navarra' | 'euskadi';
+  type?: string;
   geometry?: {
     type: 'Polygon';
     coordinates: number[][][];

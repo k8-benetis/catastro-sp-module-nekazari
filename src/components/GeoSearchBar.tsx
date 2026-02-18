@@ -252,7 +252,7 @@ export const GeoSearchBar: React.FC = () => {
     return (
         <div
             ref={containerRef}
-            className="absolute top-4 left-4 z-40 w-80"
+            className="absolute top-4 left-4 z-50 w-80 pointer-events-auto"
         >
             {/* Input container */}
             <div
