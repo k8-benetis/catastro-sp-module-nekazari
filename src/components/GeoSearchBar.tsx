@@ -225,7 +225,7 @@ export const GeoSearchBar: React.FC = () => {
     // -----------------------------------------------------------------------
     if (!isExpanded) {
         return (
-            <div className="absolute top-4 left-4 z-40">
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000]">
                 <button
                     onClick={() => setIsExpanded(true)}
                     className="
@@ -252,7 +252,7 @@ export const GeoSearchBar: React.FC = () => {
     return (
         <div
             ref={containerRef}
-            className="absolute top-4 left-4 z-50 w-80 pointer-events-auto"
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] w-80 pointer-events-auto"
         >
             {/* Input container */}
             <div

@@ -93,11 +93,11 @@ class RegionRouter:
         - Latitude: 42.8° to 43.6° (South to North)
         """
         return Polygon([
-            (-3.5, 42.8),  # SW
-            (-1.5, 42.8),  # SE
+            (-3.5, 42.4),  # SW (Rioja Alavesa is ~42.5)
+            (-1.5, 42.4),  # SE
             (-1.5, 43.6),  # NE
             (-3.5, 43.6),  # NW
-            (-3.5, 42.8)   # Close polygon
+            (-3.5, 42.4)   # Close polygon
         ])
 
     def get_region(self, latitude: float, longitude: float) -> RegionType:
@@ -113,6 +113,16 @@ class RegionRouter:
         """
         try:
             point = Point(longitude, latitude)  # Note: shapely uses (x, y) = (lon, lat)
+
+            # Check Treviño (Burgos Enclave inside Araba) - MUST be Spain
+            # Approximate bounding box for Treviño:
+            # Lat: 42.66 to 42.78
+            # Lon: -2.9 to -2.6
+            if (42.65 <= latitude <= 42.80) and (-2.95 <= longitude <= -2.55):
+                # More precise check if needed, but for now force Spain for this box
+                # to ensure we don't query Euskadi WFS which fails.
+                logger.debug(f"Point ({longitude}, {latitude}) is in Treviño (Burgos) -> Spain")
+                return 'spain'
 
             # Check Navarra first (smaller area, more specific)
             if self.navarra_geom and self.navarra_geom.contains(point):
