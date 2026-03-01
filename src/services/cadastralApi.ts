@@ -14,40 +14,13 @@ export interface CadastralData {
   };
 }
 
-// Helper to get auth token from Keycloak or localStorage
-const getAuthToken = (): string | null => {
-  if (typeof window === 'undefined') return null;
+// Auth is handled via httpOnly cookie (NKZClient sends credentials: 'include').
+const getAuthToken = (): string | null => null;
 
-  // Try Keycloak instance first
-  const keycloakInstance = (window as any).keycloak;
-  if (keycloakInstance && keycloakInstance.token) {
-    return keycloakInstance.token;
-  }
-
-  // Fallback to localStorage
-  return localStorage.getItem('auth_token');
-};
-
-// Helper to get tenant ID from token or default
+// Get tenant ID from host auth context.
 const getTenantId = (): string | null => {
-  const token = getAuthToken();
-  if (!token) return null;
-
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      window.atob(base64)
-        .split('')
-        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const decoded = JSON.parse(jsonPayload);
-    return decoded['tenant-id'] || decoded.tenant_id || decoded.tenantId || decoded.tenant || null;
-  } catch (e) {
-    console.warn('[CadastralAPI] Failed to decode token for tenant extraction', e);
-    return null;
-  }
+  if (typeof window === 'undefined') return null;
+  return (window as any).__nekazariAuthContext?.tenantId ?? null;
 };
 
 // Get API URL from runtime config
