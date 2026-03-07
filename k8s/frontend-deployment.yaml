@@ -28,8 +28,6 @@ spec:
         component: frontend
         module: catastro-spain
     spec:
-      imagePullSecrets:
-        - name: ghcr-secret
       containers:
         - name: nginx
           image: ghcr.io/k8-benetis/catastro-sp-module-nekazari/catastro-frontend-auto:latest
